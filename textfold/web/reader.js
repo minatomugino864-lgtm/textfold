@@ -511,7 +511,7 @@
     const chunksEl = h('div', 'chunks');
     docEl.append(chunksEl);
     const chunkById = Object.fromEntries(D.chunks.map((c) => [c.id, c]));
-    let body = chunksEl, list = null, listId = null, front = null, defNoted = false;
+    let body = chunksEl, list = null, listId = null, front = null;
     const boxes = [];       // open theorem / definition / proof frames
     // an equation goes with the paragraph that brings it in (the one before it in its section), or, first in its
     // section, the one after it: a note on it is that paragraph's (selectionAnchors)
@@ -543,17 +543,6 @@
         const st = h('p', 'stake');
         cur.append(hd, st);
         headEls.push([c, hd, st]);
-        if (D.app && !STALE.has(lang) && !defNoted && (DEFERRED[lang] || []).includes(c.id)) {
-          // the reading language's translation put this appendix off on purpose: it reads as written, and one
-          // notice, under the first such section, says so and asks for it (the menu asks for it too)
-          defNoted = true;
-          const note = h('p', 'defnote');
-          note.append(document.createTextNode(t.deferred_notice + ' '));
-          const go = h('button', 'linkbtn'); go.type = 'button'; go.textContent = t.deferred_fill;
-          go.addEventListener('click', () => window.DRApp.deferred(lang));
-          note.append(go);
-          cur.append(note);
-        }
         body = h('div', 'body'); cur.append(body); chunksEl.append(cur);
         list = null; listId = null;
         continue;
@@ -632,10 +621,24 @@
       const m = KIND.exec(bh.textContent.trim());
       bh.innerHTML = m && lang !== 'en' ? bh._en.replace(m[1], c.env[m[1]] || m[1]) : bh._en;
     });
+    let noted = false;
     for (const [c, hd, st] of headEls) {
       hd.innerHTML = `${c.num ? `<span class="num">${esc(c.num)}</span>` : ''}<span class="ttl">${chunkTitle(c)}</span>`;
       texify(hd);
       renderStake(c, st);
+      const sec = hd.parentNode;
+      sec.querySelectorAll(':scope > .defnote').forEach((n) => n.remove());
+      if (D.app && !STALE.has(lang) && !noted && (DEFERRED[lang] || []).includes(c.id)) {
+        // the reading language's translation put this appendix off on purpose: it reads as written, and one
+        // notice, under the first such section, says so and asks for it (the menu asks for it too)
+        noted = true;
+        const note = h('p', 'defnote');
+        note.append(document.createTextNode(t.deferred_notice + ' '));
+        const go = h('button', 'linkbtn'); go.type = 'button'; go.textContent = t.deferred_fill;
+        go.addEventListener('click', () => window.DRApp.deferred(lang));
+        note.append(go);
+        sec.insertBefore(note, st.nextSibling);
+      }
     }
     docEl.querySelectorAll('.flabel').forEach((fl) => {
       fl.textContent = fl.dataset.label.replace(/^Figure\s*/, `${c.figure} `).replace(/^Table\s*/, `${c.table} `);
