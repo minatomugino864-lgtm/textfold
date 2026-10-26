@@ -686,7 +686,7 @@ def make_handler(jobs):
                         return self.json({"error": "no-pdf", "open": pdf.where(m.group(1)) if pdf.has_source(m.group(1)) else None}, 404)
                     return self.send(200, f.read_bytes(), "application/pdf", cache="max-age=86400")
                 if u.path == "/api/research":
-                    return self.json(research.list())
+                    return self.json(research.summaries())
                 m = re.fullmatch(r"/api/research/(rw-[0-9a-f]{10})", u.path)
                 if m:
                     ws = research.load(m.group(1))
@@ -997,40 +997,46 @@ def make_handler(jobs):
                     except Exception as e:
                         return self.json({"ok": False, "error": str(e)[:600]})
                 if u.path == "/api/research":
+                    if not isinstance(body, dict):
+                        return self.json({"error": "bad body"}, 400)
                     return self.json(research.create(str(body.get("name") or ""), str(body.get("question") or "")))
                 m = re.fullmatch(r"/api/research/(rw-[0-9a-f]{10})", u.path)
                 if m:
-                    ws = research.load(m.group(1))
-                    if not ws:
-                        return self.json({"error": "no such workspace"}, 404)
-                    try:
+                    if not isinstance(body, dict):
+                        return self.json({"error": "bad body"}, 400)
+                    def change(w):   # the whole load-change-write happens in research.update, under its lock
                         if body.get("add_paper"):
-                            research.add_paper(ws, str(body["add_paper"]))
+                            research.add_paper(w, str(body["add_paper"]))
                         if body.get("remove_paper"):
-                            research.remove_paper(ws, str(body["remove_paper"]))
+                            research.remove_paper(w, str(body["remove_paper"]))
                         if isinstance(body.get("name"), str) and body["name"].strip():
-                            ws["name"] = body["name"].strip()[:200]
+                            w["name"] = body["name"].strip()[:200]
                         if isinstance(body.get("question"), str):
-                            ws["question"] = body["question"].strip()[:2000]
+                            w["question"] = body["question"].strip()[:2000]
                         if not body.get("add_paper") and not body.get("remove_paper") and ("name" in body or "question" in body):
-                            research._write(ws)   # (a rename alone still goes to disk)
-                        return self.json(ws)
+                            research._write(w)   # (a rename alone still goes to disk)
+                    try:
+                        ws = research.update(m.group(1), change)
                     except ValueError as e:
                         return self.json({"error": str(e)}, 400)
+                    return self.json(ws) if ws else self.json({"error": "no such workspace"}, 404)
                 m = re.fullmatch(r"/api/research/(rw-[0-9a-f]{10})/relations", u.path)
                 if m:
-                    ws = research.load(m.group(1))
-                    if not ws:
-                        return self.json({"error": "no such workspace"}, 404)
-                    try:
+                    if not isinstance(body, dict):
+                        return self.json({"error": "bad body"}, 400)
+                    def change(w):
                         if body.get("op") == "remove":
-                            research.remove_relation(ws, str(body.get("id") or ""))
-                            return self.json(ws)
-                        rel = research.add_relation(ws, str(body.get("type") or ""), body.get("from") or {},
-                                                    body.get("to") or {}, str(body.get("note") or ""))
-                        return self.json({"workspace": ws, "relation": rel})
+                            research.remove_relation(w, str(body.get("id") or ""))
+                            return
+                        research.add_relation(w, str(body.get("type") or ""), body.get("from") or {},
+                                              body.get("to") or {}, str(body.get("note") or ""))
+                    try:
+                        ws = research.update(m.group(1), change)
                     except ValueError as e:
                         return self.json({"error": str(e)}, 400)
+                    if not ws:
+                        return self.json({"error": "no such workspace"}, 404)
+                    return self.json(ws if body.get("op") == "remove" else {"workspace": ws, "relation": ws["relations"][-1]})
                 self.json({"error": "not found"}, 404)
             except Exception as e:
                 self.json({"error": str(e)}, 500)

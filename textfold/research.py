@@ -15,9 +15,11 @@ its relations: they show as broken, they do not disappear.
 """
 import json
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import quote as urlquote
 
 from . import store
 
@@ -35,6 +37,9 @@ REL_TYPES = {
 }
 WID_RE = re.compile(r"rw-[0-9a-f]{10}")
 RID_RE = re.compile(r"r-[0-9a-f]{8}")
+
+
+_LOCK = threading.RLock()   # one writer at a time: the server is threaded, the file is written whole
 
 
 def root():
@@ -67,12 +72,13 @@ def _write(ws):
 
 
 def create(name, question=""):
-    ws = {"format": FORMAT, "version": VERSION, "id": f"rw-{_new_id()}",
-          "name": (name or "").strip()[:200] or "Untitled workspace",
-          "question": (question or "").strip()[:2000], "created": _now(), "updated": _now(),
-          "papers": [], "relations": []}
-    _write(ws)
-    return ws
+    with _LOCK:
+        ws = {"format": FORMAT, "version": VERSION, "id": f"rw-{_new_id()}",
+              "name": str(name or "").strip()[:200] or "Untitled workspace",
+              "question": str(question or "").strip()[:2000], "created": _now(), "updated": _now(),
+              "papers": [], "relations": []}
+        _write(ws)
+        return ws
 
 
 def load(wid):
@@ -87,10 +93,27 @@ def load(wid):
         return None
     if not isinstance(ws, dict) or ws.get("format") != FORMAT:
         return None
+    if not (isinstance(ws.get("papers"), list) and isinstance(ws.get("relations"), list)
+            and isinstance(ws.get("name"), str) and all(isinstance(r, dict) and isinstance(r.get("id"), str)
+                                                        for r in ws["relations"])):
+        return None   # not a shape this version reads; the file is left as it is, for looking at
     return ws
 
 
-def list():
+def update(wid, fn):
+    """Load, change, write — all under the one lock (the server is threaded, and two requests at once must not
+    drop one of the changes). fn changes the workspace in place; what it raises comes out of here. None when
+    there is no such workspace."""
+    with _LOCK:
+        ws = load(wid)
+        if ws is None:
+            return None
+        fn(ws)
+        return ws
+
+
+def summaries():
+    """Every workspace as the list at the left of the page shows it, newest first."""
     out = []
     for d in root().iterdir() if root().exists() else []:
         ws = load(d.name)
@@ -107,53 +130,68 @@ def paper_version(pid):
 
 def add_paper(ws, pid):
     """A paper joins the set: it must be one the library holds (its text is what the anchors will point into)."""
-    pid = (pid or "").strip()
-    if not store.valid_id(pid) or not (store.pdir(pid) / "meta.json").exists():
-        raise ValueError("no such paper")
-    if not any(p["id"] == pid for p in ws["papers"]):
-        ws["papers"].append({"id": pid, "version": paper_version(pid), "added": _now()})
-        _write(ws)
-    return ws
+    with _LOCK:
+        pid = str(pid or "").strip()
+        if not store.valid_id(pid) or not (store.pdir(pid) / "meta.json").exists():
+            raise ValueError("no such paper")
+        if not any(p["id"] == pid for p in ws["papers"]):
+            ws["papers"].append({"id": pid, "version": paper_version(pid), "added": _now()})
+            _write(ws)
+        return ws
 
 
 def remove_paper(ws, pid):
-    ws["papers"] = [p for p in ws["papers"] if p["id"] != pid]
-    _write(ws)   # (relations stay: their anchors now name a paper outside the set, and the reader says so)
-    return ws
+    with _LOCK:
+        ws["papers"] = [p for p in ws["papers"] if p["id"] != str(pid)]
+        _write(ws)   # (relations stay: their anchors now name a paper outside the set, and the reader says so)
+        return ws
 
 
 def _clean_anchor(a):
-    """An anchor as it is kept: the paper, the unit (and section, when known) and the quotation shown for it."""
+    """An anchor as it is kept: the paper, the unit (and section, when known) and the quotation shown for it.
+    A unit with no name anchors nothing; the fields are strings or the anchor is not one."""
     if not isinstance(a, dict) or not isinstance(a.get("paper"), str) or not isinstance(a.get("unit"), str):
         raise ValueError("bad anchor")
-    quote = a.get("quote") or {}
-    return {"paper": a["paper"], "unit": a["unit"].strip()[:200], "section": (a.get("section") or "").strip()[:200],
+    unit = a["unit"].strip()
+    if not unit:
+        raise ValueError("bad anchor: no unit")
+    section = a.get("section")
+    if section is not None and not isinstance(section, str):
+        raise ValueError("bad anchor: the section is not a name")
+    quote = a.get("quote")
+    if quote is not None and not isinstance(quote, dict):
+        raise ValueError("bad anchor: the quotation is not one")
+    quote = quote or {}
+    return {"paper": a["paper"], "unit": unit[:200], "section": (section or "").strip()[:200],
             "quote": {k: str(quote.get(k) or "")[:300] for k in ("exact", "prefix", "suffix")}}
 
 
 def add_relation(ws, rtype, frm, to, note=""):
-    if rtype not in REL_TYPES:
-        raise ValueError("unknown relation")
-    for p in (frm, to):
-        if p["paper"] not in {q["id"] for q in ws["papers"]}:
-            raise ValueError("paper not in the workspace")
-    rel = {"id": f"r-{uuid.uuid4().hex[:8]}", "type": rtype, "status": "user",
-           "from": _clean_anchor(frm), "to": _clean_anchor(to),
-           "note": (note or "").strip()[:2000], "created": _now(), "updated": _now()}
-    ws["relations"].append(rel)
-    _write(ws)
-    return rel
+    with _LOCK:
+        if rtype not in REL_TYPES:
+            raise ValueError("unknown relation")
+        frm, to = _clean_anchor(frm), _clean_anchor(to)
+        for a in (frm, to):
+            if a["paper"] not in {q["id"] for q in ws["papers"]}:
+                raise ValueError("paper not in the workspace")
+        rel = {"id": f"r-{uuid.uuid4().hex[:8]}", "type": rtype, "status": "user",
+               "from": frm, "to": to,
+               "note": str(note or "").strip()[:2000], "created": _now(), "updated": _now()}
+        ws["relations"].append(rel)
+        _write(ws)
+        return rel
 
 
 def remove_relation(ws, rid):
-    if not RID_RE.fullmatch(rid or ""):
-        raise ValueError("no such relation")
-    kept = ws["relations"]
-    ws["relations"] = [r for r in kept if r["id"] != rid]
-    if len(ws["relations"]) == len(kept):
-        raise ValueError("no such relation")
-    _write(ws)
-    return ws
+    with _LOCK:
+        if not RID_RE.fullmatch(rid or ""):
+            raise ValueError("no such relation")
+        kept = ws["relations"]
+        ws["relations"] = [r for r in kept if r["id"] != rid]
+        if len(ws["relations"]) == len(kept):
+            raise ValueError("no such relation")
+        _write(ws)
+        return ws
 
 
 def export_json(ws):
@@ -161,7 +199,7 @@ def export_json(ws):
 
 
 def _link(a, lang="en"):
-    return f"textfold://open?paper={a['paper']}&u={a['unit']}&lang={lang}"
+    return f"textfold://open?paper={urlquote(a['paper'])}&u={urlquote(a['unit'])}&lang={urlquote(lang)}"
 
 
 def export_markdown(ws, lang="en"):
@@ -185,8 +223,8 @@ def export_markdown(ws, lang="en"):
     if ws["relations"]:
         L.append("## Relations\n")
         for r in ws["relations"]:
-            L.append(f"### {r['type']} — `{r['id']}` ({r['status']})\n")
-            L.append(f"- {REL_TYPES[r['type']]}")
+            L.append(f"### {r['type']} — `{r['id']}` ({r.get('status') or 'user'})\n")
+            L.append(f"- {REL_TYPES.get(r['type'], 'a relation')}")
             for side in ("from", "to"):
                 a = r[side]
                 q = a["quote"].get("exact") or ""

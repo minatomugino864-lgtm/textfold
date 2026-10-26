@@ -77,7 +77,7 @@ class Unit(unittest.TestCase):
         again = research.load(ws["id"])
         self.assertEqual(again["name"], "Related work")
         self.assertEqual(again["format"], "textfold/research-workspace")
-        self.assertEqual([w["id"] for w in research.list()], [ws["id"]])
+        self.assertEqual([w["id"] for w in research.summaries()], [ws["id"]])
         self.assertFalse(list(research._path(ws["id"]).parent.glob("*.tmp")))   # the atomic write left nothing over
 
     def test_a_paper_joins_the_set_and_a_relation_names_both_sides(self):
@@ -140,8 +140,8 @@ class Unit(unittest.TestCase):
 
     def test_an_empty_workspace_is_a_workspace(self):
         ws = research.create("Empty")
-        self.assertEqual(research.list()[0]["papers"], 0)
-        self.assertEqual(research.list()[0]["relations"], 0)
+        self.assertEqual(research.summaries()[0]["papers"], 0)
+        self.assertEqual(research.summaries()[0]["relations"], 0)
         self.assertIn("None yet.", research.export_markdown(ws))
         self.assertIn('"relations": []', research.export_json(ws))
 
@@ -157,6 +157,61 @@ class Unit(unittest.TestCase):
         again = research.load(ws["id"])
         self.assertEqual(len(again["relations"]), 1)   # not silently gone
         self.assertEqual([p["id"] for p in again["papers"]], ["2401.00011"])
+
+    def test_an_anchor_makes_sense_before_it_is_kept(self):
+        self.make_paper("2401.00010")
+        ws = research.create("W")
+        research.add_paper(ws, "2401.00010")
+        anchor = lambda **kw: {"paper": "2401.00010", "unit": "u0", "section": "S1", "quote": {"exact": "x"}, **kw}
+        for bad, why in (
+            (anchor(unit="   "), "no unit"),
+            (anchor(unit=""), "no unit"),
+            (anchor(quote="converges"), "the quotation is a string"),
+            (anchor(quote=42), "the quotation is a number"),
+            (anchor(section=3), "the section is a number"),
+            ({}, "no anchor at all"),
+            ("u0", "a bare unit id"),
+        ):
+            with self.subTest(why=why):
+                with self.assertRaises(ValueError):
+                    research.add_relation(ws, "extends", bad, anchor())
+        with self.assertRaises(ValueError):
+            research.add_relation(ws, "extends", None, anchor())   # a non-dict side, still a 400 and not a crash
+
+    def test_two_requests_at_once_lose_nothing(self):
+        self.make_paper("2401.00010")
+        ws = research.create("W")
+        research.add_paper(ws, "2401.00010")
+        anchor = {"paper": "2401.00010", "unit": "u0", "section": "S1", "quote": {"exact": "x"}}
+        import threading
+        def draw(n):
+            research.update(ws["id"], lambda w: research.add_relation(w, "cites", anchor, anchor, note=f"r{n}"))
+        threads = [threading.Thread(target=draw, args=(n,)) for n in range(8)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        again = research.load(ws["id"])
+        self.assertEqual(len(again["relations"]), 8)   # each request's relation is there
+        self.assertEqual(len({r["id"] for r in again["relations"]}), 8)
+
+    def test_a_file_that_is_not_a_workspace_does_not_open(self):
+        ws = research.create("W")
+        f = research._path(ws["id"])
+        for broken in ("{not json", json.dumps({"format": "something/else"}), 
+                       json.dumps({"format": research.FORMAT, "papers": 5, "relations": [], "name": "x"}),
+                       json.dumps({"format": research.FORMAT, "papers": [], "relations": [1, 2], "name": "x"})):
+            with self.subTest(broken=broken[:30]):
+                f.write_text(broken, encoding="utf-8")
+                self.assertIsNone(research.load(ws["id"]))
+                self.assertEqual(research.summaries(), [])   # and it does not take the list down with it
+
+    def test_the_export_link_survives_a_strange_unit_name(self):
+        self.make_paper("2401.00010")
+        ws = research.create("W")
+        research.add_paper(ws, "2401.00010")
+        research.add_relation(ws, "cites", {"paper": "2401.00010", "unit": "S1&p=2"},
+                              {"paper": "2401.00010", "unit": "u1"})
+        md = research.export_markdown(ws)
+        self.assertIn("u=S1%26p%3D2", md)   # the name goes encoded, the link still opens the passage
 
     def test_an_anchor_that_loses_its_paragraph_says_so(self):
         self.make_paper("2401.00010")
