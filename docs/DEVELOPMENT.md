@@ -351,7 +351,11 @@ PowerPoint or Excel file, an OpenDocument sheet or deck still wait for the engin
 to `office.py`.
 
 The server has two queues (`Jobs`): generation (model calls) and the engine (installs, conversions), each one job at a
-time; a conversion's `next` is the generation that follows it. A converted PDF opens as soon as it is stored.
+time; a conversion's `next` is the generation that follows it. The generation queue works body first: a generation may
+ask for a paper's body alone (`scope: "body"` in `/api/generate`), which puts its appendix off in the translation layer
+and, when it is done, queues the appendix's own generation behind every other paper's body (`"body-only"` leaves that
+to the reader; `translate.py`'s scopes, the layer's `deferred`). A converted PDF converted again asks for its languages
+whole, as before. A converted PDF opens as soon as it is stored.
 
 Any other link is a web page (`webpage.py`): fetched with TextFold's own user agent, its hidden elements removed (they
 are where text meant for a model is put), its notes written inside sentences and shown on hover or in the margin taken

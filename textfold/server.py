@@ -67,6 +67,7 @@ keys live in ~/.textfold/settings.json (mode 600), never in the project folder, 
 """
 import base64
 import hashlib
+import itertools
 import json
 import os
 import queue
@@ -174,10 +175,13 @@ def models_payload():
 
 class Jobs:
     """Two queues, each worked one job at a time: generation (model calls: waits on the network) and the PDF engine
-    (installing it, converting a file: the computer's own GPU), so that one PDF converts while another is generated."""
+    (installing it, converting a file: the computer's own GPU), so that one PDF converts while another is generated.
+    The generation queue is worked body first: a paper's appendix, put off by a body-first generation (its scope
+    "appendix"), waits until no paper's body is waiting for the queue."""
 
     def __init__(self):
-        self.items, self.q, self.eq = {}, queue.Queue(), queue.Queue()
+        self.items, self.q, self.eq = {}, queue.PriorityQueue(), queue.PriorityQueue()
+        self.seq = itertools.count()   # (a queue's tie-breaker, so a tier keeps its arrival order)
         self.stops = {}   # job id -> threading.Event, set when the reader stops it (kept out of the job: it is sent as JSON)
         self.pending = {}  # files that wait for the engine to be installed: pid -> (file, name, lang)
         for side in (store.DATA / "uploads").glob("*.json"):   # (kept beside each, so a restart forgets none)
@@ -196,7 +200,7 @@ class Jobs:
                "stage": "queued", "done": 0, "total": 0, "error": "", "log": [], "created": time.time(), "finished": None, **kw}
         self.items[job["id"]] = job
         self.stops[job["id"]] = threading.Event()
-        q.put(job["id"])
+        q.put((kw.get("scope") == "appendix", next(self.seq), job["id"]))   # an appendix's backfill yields to a body
         return job
 
     def _same(self, **kw):   # the same request already waiting or running (and not being stopped) is that job
@@ -296,7 +300,7 @@ class Jobs:
 
     def work(self):
         while True:
-            job = self.items[self.q.get()]
+            job = self.items[self.q.get()[2]]
             if job["status"] == "stopped":
                 continue
             job["status"] = "running"
@@ -309,6 +313,8 @@ class Jobs:
                     spec = None
                 pipeline.generate(job["pid"], job["lang"], spec, force=job["force"], scope=job.get("scope"), progress=self._progress(job, stop), log=self._log(job), stop=stop)
                 job["status"] = "done"
+                if job.get("scope") == "body":   # the body is readable: its appendix goes on, behind every other body
+                    job["next"] = self.submit(job["pid"], job["lang"], False, scope="appendix")["id"]
             except Exception as e:  # shown in the app; the traceback stays in the job log
                 if str(e) == "no-html" and not stop.is_set():
                     try:   # an arXiv paper without its HTML version: its PDF (the reader's, else arXiv's), read here
@@ -368,7 +374,7 @@ class Jobs:
 
     def work_engine(self):
         while True:
-            job = self.items[self.eq.get()]
+            job = self.items[self.eq.get()[2]]
             if job["status"] == "stopped":
                 continue
             job["status"] = "running"
@@ -722,8 +728,8 @@ def make_handler(jobs):
                     lang = body.get("lang") or None   # (none: the language it is written in, its own levels)
                     if lang is not None and lang not in langs.LANGS:
                         return self.json({"error": f"unknown language {lang}"}, 400)
-                    scope = body.get("scope")   # "body": the body first, its appendix put off; "appendix": backfill
-                    if scope is not None and scope not in ("body", "appendix"):
+                    scope = body.get("scope")   # "body": the body first, its appendix behind every body; "body-only":
+                    if scope is not None and scope not in ("body", "body-only", "appendix"):   # it waits for the reader
                         return self.json({"error": f"unknown scope {scope}"}, 400)
                     try:
                         job = jobs.submit(body.get("paper", ""), lang, body.get("force"), scope=scope)

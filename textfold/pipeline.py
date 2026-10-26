@@ -27,14 +27,15 @@ def task(cfg, name):
 
 def generate(ref, lang, cfg, force=False, jobs=4, progress=lambda *a: None, log=lambda *a: None, stop=None, scope=None):
     """scope: how much of the paper to translate (its levels are always made whole): None, everything as before;
-    "body", the sections that are not the paper's appendix, with the appendix put off in the translation layer until
-    a generate with scope "appendix" asks for it. A scope of "appendix" without a translation to backfill (or one
-    built on another version of the text) is a whole generation."""
+    "body" or "body-only", the sections that are not the paper's appendix, with the appendix put off in the
+    translation layer until a generate with scope "appendix" asks for it ("body": the queue asks for it itself when
+    the body is done, behind every other paper's body; "body-only": the reader asks when it suits). A scope of
+    "appendix" without a translation to backfill (or one built on another version of the text) is a whole generation."""
     def check():
         if stop is not None and stop.is_set():
             raise llm.Stopped()
 
-    scope = scope if scope in ("body", "appendix") else None
+    scope = scope if scope in ("body", "body-only", "appendix") else None
     pid = store.resolve(ref)
     progress("fetch", 0, 1)
     if store.is_imported(pid):   # stored when it was opened (local.py), or fetched once from Europe PMC (epmc.py)
@@ -102,7 +103,7 @@ def generate(ref, lang, cfg, force=False, jobs=4, progress=lambda *a: None, log=
             translate.build(doc, lang, task(cfg, "translate"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("translate", a, b), force=again, stop=stop, scope=scope)
             check()
             store.save_tr(doc, lang, en["version"], model,
-                          deferred=[c["id"] for c in doc["chunks"] if c.get("app")] if scope == "body" else None)
+                          deferred=[c["id"] for c in doc["chunks"] if c.get("app")] if scope in ("body", "body-only") else None)
         elif cfg is not None:
             store.apply_tr(doc, lang, tr)
             if translate.gaps(doc, lang, put_off):   # paragraphs it was stored without (a call that failed): asked

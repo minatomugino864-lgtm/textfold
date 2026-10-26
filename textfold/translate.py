@@ -161,9 +161,17 @@ def worded(u):
     return len(re.findall(r"\w", "".join(tk.get("t", "") for tk in u["toks"] if "a" not in tk))) > 1
 
 
+BODY_SCOPES = ("body", "body-only")
+
+
 def in_scope(c, scope):
-    """The chunks a translation of `scope` covers: all of them (None), or the body first, or the appendix alone."""
-    return scope is None or c.get("app") == (scope == "appendix")
+    """The chunks a translation of `scope` covers: all of them (None), the body's first (a body-first generation), or
+    the appendix's alone (its backfill)."""
+    if scope in BODY_SCOPES:
+        return not c.get("app")
+    if scope == "appendix":
+        return bool(c.get("app"))
+    return True
 
 
 def scope_skip(doc, scope):
