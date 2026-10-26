@@ -5,6 +5,11 @@
   GET  /api/papers            the papers on disk, each with when it came in and was last opened (library.py), and its
                               citekey when it was read from a Zotero item that has one (zotero.citekeys)
   GET  /api/jobs              generation jobs (queued, running, recently finished)
+  GET  /api/research          the research workspaces (research.py): each a set of papers and the relations between
+  POST /api/research          {name, question?}: make one. GET /api/research/<id>: the whole of it;
+                              POST {add_paper | remove_paper | name?, question?}: its set and its words;
+                              POST .../relations {type, from, to, note} draws one, {op: "remove", id} takes it back;
+                              GET .../export?format=md|json: the workspace as Markdown with textfold:// links, or as itself
   POST /api/jobs/stop         {id}: stop a job: a queued one is dropped; a running one ends once the model calls under way
                               return (what they wrote is kept in the cache, so starting it again goes on from there)
   POST /api/generate          {paper, lang, force}: queue a generation; one runs at a time. paper: an arXiv id or
@@ -83,7 +88,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from . import __version__, agents, bridges, build, engine, fetch, fold, ids, langs, library, llm, local, models, notes, office, pdf, pdfdoc, pdffigs, pdftext, pipeline, providers, store, zotero
+from . import __version__, agents, bridges, build, engine, fetch, fold, ids, langs, library, llm, local, models, notes, office, pdf, pdfdoc, pdffigs, pdftext, pipeline, providers, research, store, zotero
 
 STATIC = {"app.js": "text/javascript", "app.css": "text/css", "reader.js": "text/javascript",
           "reader.css": "text/css", "i18n.js": "text/javascript", "tutorial.js": "text/javascript", "webmcp.js": "text/javascript"}
@@ -573,6 +578,8 @@ def make_handler(jobs):
             try:
                 if u.path == "/":
                     return self.send(200, landing_page(jobs), "text/html; charset=utf-8")
+                if u.path == "/research":
+                    return self.send(200, (build.WEB / "research.html").read_text(encoding="utf-8"), "text/html; charset=utf-8")
                 if u.path == "/api/bridge":
                     return self.json(bridges.bridge_status(fresh=True))
                 if u.path == "/api/openrouter/minted":   # the app, waiting while the system browser authorises
@@ -678,6 +685,22 @@ def make_handler(jobs):
                     if not f:   # with where the reader may open it, to drop it on the pane
                         return self.json({"error": "no-pdf", "open": pdf.where(m.group(1)) if pdf.has_source(m.group(1)) else None}, 404)
                     return self.send(200, f.read_bytes(), "application/pdf", cache="max-age=86400")
+                if u.path == "/api/research":
+                    return self.json(research.list())
+                m = re.fullmatch(r"/api/research/(rw-[0-9a-f]{10})", u.path)
+                if m:
+                    ws = research.load(m.group(1))
+                    return self.json(ws) if ws else self.json({"error": "no such workspace"}, 404)
+                m = re.fullmatch(r"/api/research/(rw-[0-9a-f]{10})/export", u.path)
+                if m:
+                    ws = research.load(m.group(1))
+                    if not ws:
+                        return self.json({"error": "no such workspace"}, 404)
+                    fmt = (parse_qs(u.query).get("format") or ["md"])[0]
+                    if fmt == "json":
+                        return self.send(200, research.export_json(ws).encode("utf-8"), "application/json; charset=utf-8")
+                    return self.send(200, research.export_markdown(ws, (parse_qs(u.query).get("lang") or ["en"])[0]).encode("utf-8"),
+                                     "text/markdown; charset=utf-8")
                 if u.path == "/favicon.ico":
                     return self.send(204, b"", "image/x-icon")
                 self.json({"error": "not found"}, 404)
@@ -973,6 +996,41 @@ def make_handler(jobs):
                         return self.json({"ok": bool(rec["out"].get("ok")), "model": spec["id"], "seconds": round(time.time() - t0, 1)})
                     except Exception as e:
                         return self.json({"ok": False, "error": str(e)[:600]})
+                if u.path == "/api/research":
+                    return self.json(research.create(str(body.get("name") or ""), str(body.get("question") or "")))
+                m = re.fullmatch(r"/api/research/(rw-[0-9a-f]{10})", u.path)
+                if m:
+                    ws = research.load(m.group(1))
+                    if not ws:
+                        return self.json({"error": "no such workspace"}, 404)
+                    try:
+                        if body.get("add_paper"):
+                            research.add_paper(ws, str(body["add_paper"]))
+                        if body.get("remove_paper"):
+                            research.remove_paper(ws, str(body["remove_paper"]))
+                        if isinstance(body.get("name"), str) and body["name"].strip():
+                            ws["name"] = body["name"].strip()[:200]
+                        if isinstance(body.get("question"), str):
+                            ws["question"] = body["question"].strip()[:2000]
+                        if not body.get("add_paper") and not body.get("remove_paper") and ("name" in body or "question" in body):
+                            research._write(ws)   # (a rename alone still goes to disk)
+                        return self.json(ws)
+                    except ValueError as e:
+                        return self.json({"error": str(e)}, 400)
+                m = re.fullmatch(r"/api/research/(rw-[0-9a-f]{10})/relations", u.path)
+                if m:
+                    ws = research.load(m.group(1))
+                    if not ws:
+                        return self.json({"error": "no such workspace"}, 404)
+                    try:
+                        if body.get("op") == "remove":
+                            research.remove_relation(ws, str(body.get("id") or ""))
+                            return self.json(ws)
+                        rel = research.add_relation(ws, str(body.get("type") or ""), body.get("from") or {},
+                                                    body.get("to") or {}, str(body.get("note") or ""))
+                        return self.json({"workspace": ws, "relation": rel})
+                    except ValueError as e:
+                        return self.json({"error": str(e)}, 400)
                 self.json({"error": "not found"}, 404)
             except Exception as e:
                 self.json({"error": str(e)}, 500)

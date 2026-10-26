@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Research — TextFold</title>
+<style>
+/* The research workspace: its own quiet page, apart from the reader. The same ink as the reader's, few rules. */
+:root {
+  --bg: #f7f5f0; --card: #fffdf8; --ink: #221c12; --muted: #7a715f; --line: #e4ddcd;
+  --accent: #8a5a1e; --bad: #a33d2a;
+  --sans: "Inter", -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans", "Noto Sans", sans-serif;
+  --serif: "Source Serif 4", Georgia, "Songti SC", "Noto Serif", serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 450 15px/1.55 var(--sans); }
+header { display: flex; align-items: baseline; gap: 14px; padding: 18px 26px 12px; border-bottom: 1px solid var(--line); }
+header .home { display: flex; align-items: center; gap: 8px; font-weight: 650; color: var(--ink); text-decoration: none; }
+header svg { width: 20px; height: 20px; }
+header svg rect { fill: var(--accent); }
+header h1 { font-size: 17px; margin: 0; }
+header .lede { color: var(--muted); font-size: 13px; }
+main { display: grid; grid-template-columns: 280px 1fr; gap: 22px; padding: 20px 26px; align-items: start; }
+aside, #wsmain, #empty { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+h2 { font-size: 14.5px; margin: 4px 0 10px; } h3 { font-size: 13.5px; margin: 14px 0 8px; }
+#wslist { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+.wsitem { text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 9px; cursor: pointer; font: inherit; width: 100%; }
+.wsitem:hover { background: var(--bg); }
+.wsitem.on { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
+.wsitem .n { font-weight: 600; display: block; }
+.wsitem .m { color: var(--muted); font-size: 12.5px; }
+#newws { display: flex; flex-direction: column; gap: 8px; }
+input, select, button { font: inherit; color: inherit; }
+input { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+button { border: 1px solid var(--line); background: none; border-radius: 9px; padding: 7px 12px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button:hover { border-color: var(--accent); }
+.wshead .question { color: var(--muted); margin: 4px 0 10px; font-style: italic; }
+.wsactions { display: flex; gap: 8px; margin-bottom: 4px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; background: #fff; }
+.chip a { color: var(--ink); text-decoration: none; font-weight: 550; }
+.chip a:hover { color: var(--accent); }
+.chip button { border: 0; padding: 0 2px; color: var(--muted); font-size: 13px; }
+#addpaper { display: flex; gap: 8px; margin-top: 10px; }
+.rel { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; background: #fff; }
+.rel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.rel-type { font-weight: 700; font-size: 12.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
+.rel-id { color: var(--muted); font-size: 12px; }
+.anchor { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.anchor .side { border-left: 2.5px solid var(--line); padding-left: 10px; }
+.anchor .side.to { border-left-color: var(--accent); }
+.anchor .who { font-size: 12.5px; color: var(--muted); margin-bottom: 3px; display: flex; gap: 8px; align-items: baseline; }
+.anchor .who a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.anchor .who .broken { color: var(--bad); font-weight: 600; }
+.quote { font: 450 14px/1.5 var(--serif); margin: 0; }
+.rel .note { margin-top: 8px; font-size: 13.5px; color: var(--muted); }
+.rel .rm { font-size: 12.5px; color: var(--muted); border: 0; padding: 2px 4px; }
+.rel .rm:hover { color: var(--bad); }
+#newrel summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
+#relform { display: flex; flex-direction: column; gap: 10px; }
+.relrow { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+.relrow label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+.relrow select { max-width: 300px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.relrow .secsaid { font-size: 12px; color: var(--muted); padding-bottom: 8px; }
+blockquote.quote { border-left: 2.5px solid var(--line); padding: 2px 0 2px 10px; min-height: 1.4em; color: var(--muted); font-style: italic; }
+#empty { color: var(--muted); }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } .anchor { grid-template-columns: 1fr; } }
+
+</style>
+</head>
+<body>
+<header>
+  <a class="home" href="/" title="Back to the papers">
+    <svg viewBox="0 0 20 20" aria-hidden="true"><rect class="m1" x="2" y="3" width="16" height="2.4" rx="1.2"/><rect class="m2" x="2" y="8.8" width="11" height="2.4" rx="1.2"/><rect class="m3" x="2" y="14.6" width="5" height="2.4" rx="1.2"/></svg>
+    TextFold</a>
+  <h1>Research</h1>
+  <span class="lede">A workspace of your own: papers on a question, and the relations between them, anchored in both papers' words.</span>
+</header>
+<main>
+  <aside>
+    <h2>Workspaces</h2>
+    <div id="wslist"></div>
+    <form id="newws">
+      <input id="ws-name" placeholder="Name the workspace" maxlength="200">
+      <input id="ws-question" placeholder="The question it is for (optional)" maxlength="2000">
+      <button type="submit" class="primary">New workspace</button>
+    </form>
+  </aside>
+  <section id="wsmain" hidden>
+    <div class="wshead">
+      <h2 id="ws-title"></h2>
+      <p id="ws-question" class="question"></p>
+      <div class="wsactions">
+        <button type="button" id="ws-rename">Rename</button>
+        <button type="button" id="ws-export-md">Export Markdown</button>
+        <button type="button" id="ws-export-json">Export JSON</button>
+      </div>
+    </div>
+    <div class="papers">
+      <h3>Papers in this workspace</h3>
+      <div id="ws-papers" class="chips"></div>
+      <form id="addpaper">
+        <input id="paper-ref" placeholder="Add a paper the library holds: an arXiv id (2404.03442), pmc…, md-…">
+        <button type="submit">Add</button>
+      </form>
+    </div>
+    <div class="relations">
+      <h3>Relations</h3>
+      <div id="rel-list"></div>
+      <details id="newrel">
+        <summary>Draw a relation between two passages</summary>
+        <form id="relform">
+          <div class="relrow">
+            <span class="sidesel"><label>From</label><select id="from-paper"></select></span>
+            <span><label>Its passage</label><select id="from-unit"></select></span>
+            <span><label>Section</label><span id="from-section" class="secsaid"></span></span>
+          </div>
+          <blockquote id="from-quote" class="quote"></blockquote>
+          <div class="relrow">
+            <span class="sidesel"><label>Relation</label><select id="rel-type"></select></span>
+            <span class="sidesel"><label>To</label><select id="to-paper"></select></span>
+            <span><label>Its passage</label><select id="to-unit"></select></span>
+            <span><label>Section</label><span id="to-section" class="secsaid"></span></span>
+          </div>
+          <blockquote id="to-quote" class="quote"></blockquote>
+          <input id="rel-note" placeholder="Why this holds (a sentence you can defend)" maxlength="2000">
+          <button type="submit" class="primary">Save relation</button>
+        </form>
+      </details>
+    </div>
+  </section>
+  <section id="empty" class="empty" hidden>
+    <p>Nothing here yet. Make a workspace on the left, then add the papers it is for.</p>
+  </section>
+</main>
+<script>
+// The research workspace, apart from the reader: the papers a question needs, and the relations between them,
+// each anchored in both papers' own words. The reader's own page is untouched; this one speaks to the server
+// through /api/research, /api/doc and /api/ids, and nothing else.
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : undefined);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.error) throw new Error(d.error || r.statusText);
+  return d;
+}
+
+let current = null;                       // the open workspace, as the server keeps it
+const unitCache = new Map();              // paper id -> fold.document's sections (the passage picker's rows)
+
+// ── the workspace list ───────────────────────────────────────────────────────────────
+async function renderList() {
+  const list = await api('/api/research');
+  const el = $('wslist');
+  el.replaceChildren();
+  if (!list.length) { const p = document.createElement('p'); p.className = 'm'; p.textContent = 'None yet.'; el.append(p); }
+  for (const w of list) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'wsitem' + (current && current.id === w.id ? ' on' : '');
+    b.innerHTML = `<span class="n">${esc(w.name)}</span><span class="m">${w.papers} paper${w.papers === 1 ? '' : 's'} · ${w.relations} relation${w.relations === 1 ? '' : 's'}</span>`;
+    b.addEventListener('click', () => open(w.id));
+    el.append(b);
+  }
+}
+
+async function open(id) {
+  current = await api(`/api/research/${id}`);
+  $('wsmain').hidden = false; $('empty').hidden = true;
+  renderWorkspace();
+  renderList();
+}
+
+// ── one workspace ────────────────────────────────────────────────────────────────────
+function renderWorkspace() {
+  const ws = current;
+  $('ws-title').textContent = ws.name;
+  $('ws-question').textContent = ws.question || '';
+  const chips = $('ws-papers');
+  chips.replaceChildren();
+  if (!ws.papers.length) { const p = document.createElement('span'); p.className = 'm'; p.textContent = 'No papers yet — add one below.'; chips.append(p); }
+  for (const p of ws.papers) {
+    const c = document.createElement('span');
+    c.className = 'chip';
+    c.innerHTML = `<a href="/p/${esc(p.id)}" title="Open in the reader">${esc(p.id)}</a><button type="button" title="Remove from the workspace (its relations stay, shown as broken)">×</button>`;
+    c.querySelector('button').addEventListener('click', async () => { current = await api(`/api/research/${ws.id}`, { remove_paper: p.id }); renderWorkspace(); renderList(); });
+    chips.append(c);
+  }
+  renderRelations(ws);
+  renderRelForm(ws);
+}
+
+function anchorSide(a, status) {
+  const where = status && status.units && status.units[a.unit];
+  const ok = where && where.here;
+  const broken = a.unit && (!where || where.gone || where.unknown);
+  return `<div class="side ${a.side}">
+    <div class="who"><a href="/p/${esc(a.paper)}?lang=en#u=${esc(a.unit)}" title="Open this passage in the reader">${esc(a.paper)}</a>
+      <span>· ${esc(a.unit)}</span>
+      ${broken ? `<span class="broken" title="The text no longer names this passage where it did (ids.py): find it again before trusting the link">⨯ anchor moved</span>` : ''}</div>
+    <blockquote class="quote">“${esc(a.quote.exact || '—')}”</blockquote></div>`;
+}
+
+async function anchorStatus(paper, unit) {
+  try {
+    const d = await api(`/api/ids/${encodeURIComponent(paper)}?u=${encodeURIComponent(unit)}`);
+    return d;
+  } catch { return null; }   // (a paper gone from the library: every anchor on it shows as moved)
+}
+
+async function renderRelations(ws) {
+  const el = $('rel-list');
+  el.replaceChildren();
+  if (!ws.relations.length) { const p = document.createElement('p'); p.className = 'm'; p.textContent = 'No relations yet. Read the two passages, then draw one below.'; el.append(p); }
+  for (const r of ws.relations) {
+    const box = document.createElement('div');
+    box.className = 'rel';
+    const [fs, ts] = await Promise.all([anchorStatus(r.from.paper, r.from.unit), anchorStatus(r.to.paper, r.to.unit)]);
+    box.innerHTML = `<div class="rel-head"><span class="rel-type">${esc(r.type)}</span><span class="rel-id">${esc(r.id)}</span>
+        <button type="button" class="rm" title="Delete this relation">Delete</button></div>
+      <div class="anchor">${anchorSide({ ...r.from, side: 'from' }, fs)}${anchorSide({ ...r.to, side: 'to' }, ts)}</div>
+      ${r.note ? `<div class="note"><strong>Why.</strong> ${esc(r.note)}</div>` : ''}`;
+    box.querySelector('.rm').addEventListener('click', async () => {
+      current = await api(`/api/research/${ws.id}/relations`, { op: 'remove', id: r.id });
+      renderWorkspace(); renderList();
+    });
+    el.append(box);
+  }
+}
+
+// ── drawing a relation ───────────────────────────────────────────────────────────────
+const TYPE_MEANS = {
+  extends: 'takes the other’s method, setup or finding further',
+  supports: 'gives evidence for a claim made in the other',
+  qualifies: 'limits, weakens or adds a caveat to the other’s claim',
+  contrasts: 'reads the same question differently, under comparable settings',
+  shares_method: 'both rest on the same method, dataset or technique',
+  cites: 'one cites the other, as the bibliography says',
+};
+
+async function docOf(paper) {
+  if (!unitCache.has(paper)) {
+    try { unitCache.set(paper, (await api(`/api/doc/${encodeURIComponent(paper)}?lang=en`)).sections); }
+    catch { unitCache.set(paper, []); }   // (a paper without its text: no passages to pick)
+  }
+  return unitCache.get(paper);
+}
+
+async function fillUnits(side) {
+  const paper = $(side + '-paper').value;
+  const sel = $(side + '-unit'), said = $(side + '-section'), quote = $(side + '-quote');
+  sel.replaceChildren(); said.textContent = ''; quote.textContent = '';
+  const secs = await docOf(paper);
+  let n = 0;
+  for (const s of secs) for (const u of s.units) {
+    if (!u.full || u.full.length < 40) continue;   // (a passage worth anchoring carries words of its own)
+    const o = document.createElement('option');
+    o.value = u.id;
+    o.textContent = `${s.num ? s.num + ' ' : ''}${s.title} › ${u.full.slice(0, 70)}…`;
+    o.dataset.section = s.id;
+    o.dataset.exact = u.full.slice(0, 220);
+    sel.append(o); n++;
+  }
+  if (!n) { const o = document.createElement('option'); o.value = ''; o.textContent = '(no text to pick — is the paper folded?)'; sel.append(o); }
+  pickUnit(side);
+}
+
+function pickUnit(side) {
+  const o = $(side + '-unit').selectedOptions[0];
+  $(side + '-section').textContent = o && o.dataset.section ? `(${o.dataset.section})` : '';
+  $(side + '-quote').textContent = o && o.dataset.exact ? `“${o.dataset.exact.slice(0, 160)}…”` : '';
+}
+
+function renderRelForm(ws) {
+  const picks = ['from', 'to'].map((side) => {
+    const s = $(side + '-paper');
+    s.replaceChildren();
+    for (const p of ws.papers) { const o = document.createElement('option'); o.value = p.id; o.textContent = p.id; s.append(o); }
+    s.onchange = () => fillUnits(side);
+    $(side + '-unit').onchange = () => pickUnit(side);
+    fillUnits(side);
+    return s.value;
+  });
+  const ty = $('rel-type');
+  ty.replaceChildren();
+  for (const [t, means] of Object.entries(TYPE_MEANS)) {
+    const o = document.createElement('option'); o.value = t; o.textContent = `${t} — ${means}`; ty.append(o);
+  }
+}
+
+$('relform').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const anchor = (side) => {
+    const o = $(side + '-unit').selectedOptions[0];
+    return { paper: $(side + '-paper').value, unit: o ? o.value : '', section: o ? (o.dataset.section || '') : '',
+             quote: { exact: o ? (o.dataset.exact || '') : '', prefix: '', suffix: '' } };
+  };
+  try {
+    const d = await api(`/api/research/${current.id}/relations`,
+      { type: $('rel-type').value, from: anchor('from'), to: anchor('to'), note: $('rel-note').value });
+    current = d.workspace;
+    $('rel-note').value = '';
+    renderWorkspace(); renderList();
+  } catch (x) { alert(x.message); }
+});
+
+// ── the rest of the page ─────────────────────────────────────────────────────────────
+$('newws').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const w = await api('/api/research', { name: $('ws-name').value, question: $('ws-question').value });
+  $('ws-name').value = ''; $('ws-question').value = '';
+  await renderList(); open(w.id);
+});
+
+$('addpaper').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    current = await api(`/api/research/${current.id}`, { add_paper: $('paper-ref').value.trim() });
+    $('paper-ref').value = '';
+    renderWorkspace(); renderList();
+  } catch (x) { alert(x.message); }
+});
+
+$('ws-rename').addEventListener('click', async () => {
+  const name = prompt('Name the workspace', current.name);
+  if (name === null) return;
+  current = await api(`/api/research/${current.id}`, { name });
+  renderWorkspace(); renderList();
+});
+
+const download = (name, text, type) => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; a.click(); URL.revokeObjectURL(a.href);
+};
+$('ws-export-md').addEventListener('click', async () => {
+  download(`${current.name}.md`, await (await fetch(`/api/research/${current.id}/export?format=md`)).text(), 'text/markdown');
+});
+$('ws-export-json').addEventListener('click', async () => {
+  download(`${current.name}.json`, await (await fetch(`/api/research/${current.id}/export?format=json`)).text(), 'application/json');
+});
+
+renderList().then(() => { if (!current) $('empty').hidden = false; });
+
+</script>
+</body>
+</html>
