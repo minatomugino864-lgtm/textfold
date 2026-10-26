@@ -311,13 +311,19 @@ def save_en(doc, model):
     })
 
 
-def save_tr(doc, lang, base, model):
-    write(doc["meta"]["id"], f"tr-{lang}", {
+def save_tr(doc, lang, base, model, deferred=None):
+    """deferred: the chunk ids put off on purpose (a body-first translation's appendix, translate's scopes), kept in
+    the layer so the reader can say so and a backfill can ask for them. No key when nothing is deferred, as the
+    layers written before this field read."""
+    data = {
         "version": stamp(), "base": base, "model": model,
         "units": {uid: u["tr"][lang] for uid, u in doc["units"].items() if lang in u.get("tr", {})},
         "chunks": {c["id"]: c["tr"][lang] for c in doc["chunks"] if lang in c.get("tr", {})},
         "title": doc["meta"].get("titles", {}).get(lang),
-    })
+    }
+    if deferred:
+        data["deferred"] = list(deferred)
+    write(doc["meta"]["id"], f"tr-{lang}", data)
 
 
 def apply_en(doc, en):
@@ -386,11 +392,16 @@ def assemble(pid, only=None):
         if lang not in meta["langs"]:
             meta["langs"].append(lang)
         meta["versions"][lang] = tr["version"]
+        put_off = set(tr.get("deferred") or [])   # the appendix a body-first translation has not asked for yet
+        if put_off:
+            # (a chunk id the text no longer has — a PDF converted again names its sections by their places — is
+            # quietly dropped here; what the fill would translate anew is not on this list)
+            meta.setdefault("deferred", {})[lang] = [c["id"] for c in doc["chunks"] if c["id"] in put_off]
         if not en or tr.get("base") != en["version"]:
             meta["stale"].append(lang)
         elif lang != base:   # paragraphs it has no translation for (a call that failed): asked for when it is generated again
             from .translate import gaps   # (translate imports ladder and llm, which read through this module)
-            n = len(gaps(doc, lang))
+            n = len(gaps(doc, lang, put_off))
             if n:
                 meta.setdefault("gaps", {})[lang] = n
     return doc

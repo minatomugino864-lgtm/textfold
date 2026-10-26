@@ -25,11 +25,16 @@ def task(cfg, name):
     return models.for_task(llm.spec_of(cfg), name)
 
 
-def generate(ref, lang, cfg, force=False, jobs=4, progress=lambda *a: None, log=lambda *a: None, stop=None):
+def generate(ref, lang, cfg, force=False, jobs=4, progress=lambda *a: None, log=lambda *a: None, stop=None, scope=None):
+    """scope: how much of the paper to translate (its levels are always made whole): None, everything as before;
+    "body", the sections that are not the paper's appendix, with the appendix put off in the translation layer until
+    a generate with scope "appendix" asks for it. A scope of "appendix" without a translation to backfill (or one
+    built on another version of the text) is a whole generation."""
     def check():
         if stop is not None and stop.is_set():
             raise llm.Stopped()
 
+    scope = scope if scope in ("body", "appendix") else None
     pid = store.resolve(ref)
     progress("fetch", 0, 1)
     if store.is_imported(pid):   # stored when it was opened (local.py), or fetched once from Europe PMC (epmc.py)
@@ -79,19 +84,33 @@ def generate(ref, lang, cfg, force=False, jobs=4, progress=lambda *a: None, log=
         if lang == "en":   # notes made on the ladder of a text in another language said "en" (it was always English)
             notes.settle_base(pid, base)
         tr = store.read(pid, f"tr-{lang}")
-        if force or tr is None or tr.get("base") != en["version"]:
-            check()
-            again = force and not (replaced and tr is None)
-            translate.build(doc, lang, task(cfg, "translate"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("translate", a, b), force=again, stop=stop)
-            check()
-            store.save_tr(doc, lang, en["version"], model)
-        elif cfg is not None:
-            store.apply_tr(doc, lang, tr)
-            if translate.gaps(doc, lang):   # paragraphs it was stored without (a call that failed): asked for now
+        put_off = set((tr or {}).get("deferred") or ())
+        if scope == "appendix" and tr is not None and cfg is not None and not force and tr.get("base") == en["version"]:
+            if not put_off & {c["id"] for c in doc["chunks"]}:
+                store.apply_tr(doc, lang, tr)   # nothing was put off: read as it is (as a plain generate would)
+            else:
                 check()
-                translate.fill(doc, lang, task(cfg, "translate"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("translate", a, b), stop=stop)
+                store.apply_tr(doc, lang, tr)
+                translate.build(doc, lang, task(cfg, "translate"), cache, jobs=jobs, log=log,
+                                progress=lambda a, b: progress("translate", a, b), stop=stop, scope="appendix")
                 was = tr.get("model") or model
                 check()
                 store.save_tr(doc, lang, en["version"], was if was == model else f"{was} + {model}")
+        elif force or tr is None or tr.get("base") != en["version"]:
+            check()
+            again = force and not (replaced and tr is None)
+            translate.build(doc, lang, task(cfg, "translate"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("translate", a, b), force=again, stop=stop, scope=scope)
+            check()
+            store.save_tr(doc, lang, en["version"], model,
+                          deferred=[c["id"] for c in doc["chunks"] if c.get("app")] if scope == "body" else None)
+        elif cfg is not None:
+            store.apply_tr(doc, lang, tr)
+            if translate.gaps(doc, lang, put_off):   # paragraphs it was stored without (a call that failed): asked
+                check()                              # for now; the appendix put off on purpose is not one of them
+                translate.fill(doc, lang, task(cfg, "translate"), cache, jobs=jobs, log=log, progress=lambda a, b: progress("translate", a, b), stop=stop, skip=put_off)
+                was = tr.get("model") or model
+                check()
+                store.save_tr(doc, lang, en["version"], was if was == model else f"{was} + {model}",
+                              deferred=[c["id"] for c in doc["chunks"] if c["id"] in put_off])
     progress("done", 1, 1)
     return pid

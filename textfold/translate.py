@@ -161,11 +161,23 @@ def worded(u):
     return len(re.findall(r"\w", "".join(tk.get("t", "") for tk in u["toks"] if "a" not in tk))) > 1
 
 
-def gaps(doc, lang):
+def in_scope(c, scope):
+    """The chunks a translation of `scope` covers: all of them (None), or the body first, or the appendix alone."""
+    return scope is None or c.get("app") == (scope == "appendix")
+
+
+def scope_skip(doc, scope):
+    """The chunks a translation of `scope` does not ask for: their ids, for tasks, retries and titles."""
+    return {c["id"] for c in doc["chunks"] if not in_scope(c, scope)}
+
+
+def gaps(doc, lang, skip=()):
     """The paragraphs of the sections that have no translation in lang: a part whose call failed (a timeout, a rate
-    limit, a reply that was not JSON), a paragraph the model left out of its reply."""
+    limit, a reply that was not JSON), a paragraph the model left out of its reply. skip: chunk ids put off on
+    purpose (a body-first translation's appendix, store.save_tr), which are not a failure."""
     U = doc["units"]
-    return [uid for c in doc["chunks"] for uid in c["units"] if lang not in U[uid].get("tr", {}) and worded(U[uid])]
+    return [uid for c in doc["chunks"] if c["id"] not in skip
+            for uid in c["units"] if lang not in U[uid].get("tr", {}) and worded(U[uid])]
 
 
 def _ask(doc, lang, tasks, cfg, cache_dir, jobs, log, tick, force, stop, again=False):
@@ -221,9 +233,9 @@ def _ask(doc, lang, tasks, cfg, cache_dir, jobs, log, tick, force, stop, again=F
     return cost, errors, warnings
 
 
-def _again(doc, lang):
+def _again(doc, lang, skip=()):
     """The gaps as parts to ask: by section, a section's missing paragraphs in as few runs as fit PART_CHARS."""
-    missing = set(gaps(doc, lang))
+    missing = set(gaps(doc, lang, skip))
     tasks = []
     for c in doc["chunks"]:
         us = [uid for uid in c["units"] if uid in missing]
@@ -249,50 +261,54 @@ def _counter(progress, total):
     return tick, more
 
 
-def build(doc, lang, cfg, cache_dir, jobs=4, log=print, progress=None, force=False, stop=None):
+def build(doc, lang, cfg, cache_dir, jobs=4, log=print, progress=None, force=False, stop=None, scope=None):
     """The paper in lang, section by section; then what came back without a translation is asked for once more (the
-    paragraphs alone), so one failed call or a paragraph left out does not leave English in the translation."""
+    paragraphs alone), so one failed call or a paragraph left out does not leave English in the translation. scope:
+    the body's sections alone (a body-first generation: the appendix is put off, pipeline records it), or the
+    appendix's alone (its backfill)."""
     meta = doc["meta"]
     meta.setdefault("titles", {})
-    tasks = [(c, k, us) for c in doc["chunks"] if c["units"] for k, us in enumerate(parts(doc, c))]   # (a short section is one part: its prompt is as before)
+    skip = scope_skip(doc, scope)
+    tasks = [(c, k, us) for c in doc["chunks"] if c["units"] and c["id"] not in skip
+             for k, us in enumerate(parts(doc, c))]   # (a short section is one part: its prompt is as before)
     tick, more = _counter(progress, len(tasks))
     cost, errors, warnings = _ask(doc, lang, tasks, cfg, cache_dir, jobs, log, tick, force, stop)
     if tasks and len(errors) == len(tasks):
         raise RuntimeError(str(errors[0]))
-    retry = _again(doc, lang)
+    retry = _again(doc, lang, skip)
     if retry:
-        log(f"  ~ {lang}: {len(gaps(doc, lang))} paragraphs without a translation, asked again")
+        log(f"  ~ {lang}: {len(gaps(doc, lang, skip))} paragraphs without a translation, asked again")
         more(len(retry))
         c2, _, w2 = _ask(doc, lang, retry, cfg, cache_dir, jobs, log, tick, force, stop, again=True)
         cost += c2
         warnings += w2
-    cost += _titles(doc, lang, cfg, cache_dir, force, log)
+    cost += _titles(doc, lang, cfg, cache_dir, force, log, skip)
     for w in warnings:
         log(f"  ~ {lang} {w}")
     return cost
 
 
-def fill(doc, lang, cfg, cache_dir, jobs=4, log=print, progress=None, stop=None):
+def fill(doc, lang, cfg, cache_dir, jobs=4, log=print, progress=None, stop=None, skip=()):
     """A stored translation's gaps (gaps()), asked for now: the paragraphs alone, the rest kept as it is. Made by
     TextFold 0.10.14 and before, a translation kept what one failed call left out. RuntimeError when every call
-    failed again."""
+    failed again. skip: chunk ids put off on purpose, which are no gap (a body-first translation's appendix)."""
     doc["meta"].setdefault("titles", {})
-    retry = _again(doc, lang)
+    retry = _again(doc, lang, skip)
     tick, _ = _counter(progress, len(retry))
     cost, errors, warnings = _ask(doc, lang, retry, cfg, cache_dir, jobs, log, tick, False, stop, again=True)
     if retry and len(errors) == len(retry):
         raise RuntimeError(str(errors[0]))
-    cost += _titles(doc, lang, cfg, cache_dir, False, log)
+    cost += _titles(doc, lang, cfg, cache_dir, False, log, skip)
     for w in warnings:
         log(f"  ~ {lang} {w}")
     return cost
 
 
-def _titles(doc, lang, cfg, cache_dir, force, log):
+def _titles(doc, lang, cfg, cache_dir, force, log, skip=()):
     """Headings with no text of their own ("2 Experiments"), and the paper title when it came back untranslated, in
-    one call. Its cost."""
+    one call. Its cost. skip: chunks outside the translation's scope."""
     meta, L = doc["meta"], langs.name(lang)
-    bare = [c for c in doc["chunks"] if lang not in c.get("tr", {}) and c["title"]]
+    bare = [c for c in doc["chunks"] if c["id"] not in skip and lang not in c.get("tr", {}) and c["title"]]
     if meta["titles"].get(lang) == meta["title"]:
         meta["titles"].pop(lang)  # the section call sometimes hands the English title back
     titles = [c["title"] for c in bare] + ([] if meta["titles"].get(lang) else [meta["title"]])

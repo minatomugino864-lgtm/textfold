@@ -7,8 +7,10 @@
   GET  /api/jobs              generation jobs (queued, running, recently finished)
   POST /api/jobs/stop         {id}: stop a job: a queued one is dropped; a running one ends once the model calls under way
                               return (what they wrote is kept in the cache, so starting it again goes on from there)
-  POST /api/generate          {paper, lang, force}: queue a generation; one runs at a time. paper: an arXiv id or
-                              link, a PMC or PPR id, a DOI (Europe PMC, epmc.py), or a stored document's id
+  POST /api/generate          {paper, lang, force, scope?}: queue a generation; one runs at a time. paper: an arXiv id or
+                              link, a PMC or PPR id, a DOI (Europe PMC, epmc.py), or a stored document's id. scope
+                              "body" translates the paper's body first and puts its appendix off (then scope
+                              "appendix" asks for it; translate.py, store.save_tr's deferred)
   POST /api/import            {name, text, id?}: store a Markdown file as a paper (local.py); its id, to generate. With
                               id (a Markdown document stored before, md-…): its text replaced by this one under the same
                               id, its notes found again in it and its levels set aside ({paper, title, replaced: true};
@@ -201,9 +203,11 @@ class Jobs:
         return next((j for j in self.items.values() if j["status"] in ("queued", "running") and not j.get("stopping")
                      and all(j.get(k) == v for k, v in kw.items())), None)
 
-    def submit(self, ref, lang, force, attach=None):
+    def submit(self, ref, lang, force, attach=None, scope=None):
+        """scope: how much to translate (pipeline.generate): None, the body first ("body"), or a body-first
+        translation's appendix ("appendix"). A different scope is a different job."""
         pid = store.resolve(ref)
-        return self._same(kind="generate", pid=pid, lang=lang) or self._new(self.q, pid=pid, lang=lang, force=bool(force), attach=attach)
+        return self._same(kind="generate", pid=pid, lang=lang, scope=scope) or self._new(self.q, pid=pid, lang=lang, force=bool(force), attach=attach, scope=scope)
 
     def convert(self, pid, file, name, lang, tier=None, replace=False):
         """A file through the engine (then generated): file is on disk; replace converts a stored one again."""
@@ -303,7 +307,7 @@ class Jobs:
                     job["model"] = spec["id"]
                 except RuntimeError:   # none: the paper is still fetched and parsed, to be read as written
                     spec = None
-                pipeline.generate(job["pid"], job["lang"], spec, force=job["force"], progress=self._progress(job, stop), log=self._log(job), stop=stop)
+                pipeline.generate(job["pid"], job["lang"], spec, force=job["force"], scope=job.get("scope"), progress=self._progress(job, stop), log=self._log(job), stop=stop)
                 job["status"] = "done"
             except Exception as e:  # shown in the app; the traceback stays in the job log
                 if str(e) == "no-html" and not stop.is_set():
@@ -718,8 +722,11 @@ def make_handler(jobs):
                     lang = body.get("lang") or None   # (none: the language it is written in, its own levels)
                     if lang is not None and lang not in langs.LANGS:
                         return self.json({"error": f"unknown language {lang}"}, 400)
+                    scope = body.get("scope")   # "body": the body first, its appendix put off; "appendix": backfill
+                    if scope is not None and scope not in ("body", "appendix"):
+                        return self.json({"error": f"unknown scope {scope}"}, 400)
                     try:
-                        job = jobs.submit(body.get("paper", ""), lang, body.get("force"))
+                        job = jobs.submit(body.get("paper", ""), lang, body.get("force"), scope=scope)
                     except ValueError as e:   # not a paper's reference, or (a DOI) none Europe PMC can read in full
                         return self.json({"error": str(e) if str(e) in ("no-fulltext", "no-article") else "bad-ref"}, 400)
                     return self.json(job)
