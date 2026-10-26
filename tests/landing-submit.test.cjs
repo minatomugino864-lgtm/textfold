@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 const app = fs.readFileSync(path.join(__dirname, '..', 'textfold', 'web', 'app.js'), 'utf8');
-const startCode = app.slice(app.indexOf('    async function start(ref, label, langOf) {'),
+const startCode = app.slice(app.indexOf('    async function start(ref, label, langOf, scope) {'),
   app.indexOf('    // a file that needs the engine:'));
 const formCode = app.slice(app.indexOf('    form.onsubmit = async (e) => {'),
   app.indexOf('    // a file, from the drop zone'));
@@ -15,15 +15,16 @@ function landing({ model = true, submit = async () => ({ status: 'queued' }) } =
   const err = { hidden: false };
   const card = { hidden: true };
   const form = {};
+  const bodyfirst = { checked: false };
   const context = vm.createContext({
     form, err, card, sel: { value: 'en' }, modelName: model ? 'model' : '',
-    document: { getElementById: id => id === 'ref' ? input : null },
+    document: { getElementById: id => id === 'ref' ? input : id === 'bodyfirst' ? bodyfirst : null },
     t: () => ({ bad_ref: 'Invalid URL', no_model: 'No model' }),
     fail: text => { err.textContent = text; err.hidden = false; },
     errText: x => x, onCard: () => () => {}, submit,
   });
   vm.runInContext(`let latest = null; ${startCode}\n${formCode}`, context);
-  return { input, err, card, submit: () => form.onsubmit({ preventDefault() {} }) };
+  return { input, err, card, bodyfirst, submit: () => form.onsubmit({ preventDefault() {} }) };
 }
 
 test('a queued paper frees the input for the next arXiv link', async () => {
@@ -58,4 +59,23 @@ test('a slow submission never erases the next URL the reader has started typing'
   accept({ status: 'queued' });
   await pending;
   assert.equal(h.input.value, 'https://arxiv.org/abs/2602.54321');
+});
+
+test('the body-first mode passes its scope to the generation, and stays off otherwise', async () => {
+  const seen = [];
+  const h = landing({ submit: async (ref, lang, force, update, scope) => { seen.push(scope); return { status: 'queued' }; } });
+  await h.submit();
+  assert.deepEqual(seen, [undefined]);
+  assert.equal(h.input.value, '');
+
+  h.bodyfirst.checked = true;
+  h.input.value = 'https://arxiv.org/abs/2602.00002';
+  await h.submit();
+  assert.deepEqual(seen, [undefined, 'body']);
+  assert.equal(h.input.value, '');
+
+  h.bodyfirst.checked = false;
+  h.input.value = 'https://arxiv.org/abs/2603.00001';
+  await h.submit();
+  assert.deepEqual(seen, [undefined, 'body', undefined]);
 });

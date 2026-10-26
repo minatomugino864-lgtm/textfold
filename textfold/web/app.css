@@ -214,6 +214,9 @@ html.sb-narrow .chunk > .side, html.sb-narrow .chunk > .lside { position: static
 .bar-ico { width: 20px; height: 20px; flex: none; color: var(--muted); }
 /* what the bar reads, under it; then a Markdown file: this box, or dropped anywhere on the page */
 .sources { margin: 10px 0 0 4px; font: 450 13px/1.5 var(--sans); color: var(--muted); }
+/* the body-first mode: the reader's choice, off unless ticked */
+.bf { display: flex; align-items: center; gap: 7px; margin: 8px 0 0 4px; font: 450 13px/1.4 var(--sans); color: var(--muted); cursor: pointer; width: fit-content; }
+.bf input { width: 14px; height: 14px; accent-color: var(--ink); cursor: pointer; }
 .dropzone { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; margin-top: 16px; padding: 20px 16px;
   border: 1.5px dashed var(--line); border-radius: 14px; background: none; font: 500 14px var(--sans); color: var(--muted); cursor: pointer;
   transition: border-color .15s, background-color .15s, color .15s; }

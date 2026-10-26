@@ -45,6 +45,10 @@
   // asks for them as the language is opened, and its menu can ask again
   const GAPS = D.meta.gaps || {};
   const gapTag = (code, t) => (GAPS[code] && !STALE.has(code) ? `<em class="stale">${esc(t.gaps_tag.replace('{n}', GAPS[code]))}</em>` : '');
+  // the appendix a body-first translation put off on purpose (store.assemble's "deferred"): not a failure — it
+  // reads as written, and the language menu asks for it
+  const DEFERRED = D.meta.deferred || {};
+  const defTag = (code, t) => ((DEFERRED[code] || []).length && !STALE.has(code) ? `<em class="stale">${esc(t.deferred_tag)}</em>` : '');
   // a document in Chinese or Japanese (store.assemble): the CJK rules below are its only, an English paper reads as before
   const CJK_DOC = !!D.meta.cjk;
   const trOf = (x) => (x && x.tr && x.tr[lang]) || null;   // a unit's or chunk's translation, if any (none in BASE)
@@ -507,7 +511,7 @@
     const chunksEl = h('div', 'chunks');
     docEl.append(chunksEl);
     const chunkById = Object.fromEntries(D.chunks.map((c) => [c.id, c]));
-    let body = chunksEl, list = null, listId = null, front = null;
+    let body = chunksEl, list = null, listId = null, front = null, defNoted = false;
     const boxes = [];       // open theorem / definition / proof frames
     // an equation goes with the paragraph that brings it in (the one before it in its section), or, first in its
     // section, the one after it: a note on it is that paragraph's (selectionAnchors)
@@ -539,6 +543,17 @@
         const st = h('p', 'stake');
         cur.append(hd, st);
         headEls.push([c, hd, st]);
+        if (D.app && !STALE.has(lang) && !defNoted && (DEFERRED[lang] || []).includes(c.id)) {
+          // the reading language's translation put this appendix off on purpose: it reads as written, and one
+          // notice, under the first such section, says so and asks for it (the menu asks for it too)
+          defNoted = true;
+          const note = h('p', 'defnote');
+          note.append(document.createTextNode(t.deferred_notice + ' '));
+          const go = h('button', 'linkbtn'); go.type = 'button'; go.textContent = t.deferred_fill;
+          go.addEventListener('click', () => window.DRApp.deferred(lang));
+          note.append(go);
+          cur.append(note);
+        }
         body = h('div', 'body'); cur.append(body); chunksEl.append(cur);
         list = null; listId = null;
         continue;
@@ -628,7 +643,7 @@
     const sum = docEl.querySelector('.bib summary'); if (sum) sum.textContent = c.refs;
     document.getElementById('hint').textContent = t.hint;
     document.querySelector('.tagline').textContent = t.tagline;
-    langBtn.innerHTML = `${esc(nameOf(lang))}${STALE.has(lang) ? ` <em class="stale">${esc(t.stale)}</em>` : gapTag(lang, t) ? ` ${gapTag(lang, t)}` : ''} <span class="caret">▾</span>`;
+    langBtn.innerHTML = `${esc(nameOf(lang))}${STALE.has(lang) ? ` <em class="stale">${esc(t.stale)}</em>` : gapTag(lang, t) ? ` ${gapTag(lang, t)}` : defTag(lang, t) ? ` ${defTag(lang, t)}` : ''} <span class="caret">▾</span>`;
     langBtn.title = t.language;
     typeBtn.title = t.ty_title; typeBtn.setAttribute('aria-label', t.ty_title);
     if (!typeMenu.hidden) renderTypeMenu();
@@ -4157,12 +4172,18 @@ math { font-size: 1.05em; }
       f.addEventListener('click', () => { closeLangMenu(); window.DRApp.fill(lang); });
       langMenu.append(f);
     }
+    if (D.app && (DEFERRED[lang] || []).length && !STALE.has(lang)) {   // the appendix put off on purpose: asked for now,
+      const f = h('button', 'lm-item lm-regen lm-fill'); f.type = 'button';   // at the queue's low tier, the rest kept
+      f.innerHTML = `<span>↻ ${esc(t.deferred_fill)}</span><em>${esc(nameOf(lang))}</em>`;
+      f.addEventListener('click', () => { closeLangMenu(); window.DRApp.deferred(lang); });
+      langMenu.append(f);
+    }
     for (const code of Object.keys(NAMES)) {
       const have = AVAIL.includes(code);
       if (!have && !D.app) continue;
       const b = h('button', `lm-item${code === lang ? ' on' : ''}${have ? '' : ' gen'}`);
       b.type = 'button';
-      b.innerHTML = `<span>${esc(nameOf(code))}</span>${!have ? `<em>+ ${esc(t.gen_lang)}</em>` : STALE.has(code) ? `<em class="stale">${esc(t.stale)}</em>` : gapTag(code, t)}`;
+      b.innerHTML = `<span>${esc(nameOf(code))}</span>${!have ? `<em>+ ${esc(t.gen_lang)}</em>` : STALE.has(code) ? `<em class="stale">${esc(t.stale)}</em>` : gapTag(code, t) || defTag(code, t)}`;
       b.addEventListener('click', () => { closeLangMenu(); if (have) setLang(code); else window.DRApp.generate(code, false); });
       langMenu.append(b);
     }

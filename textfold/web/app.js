@@ -762,8 +762,8 @@
     renderSidebar(); onUpdate(job); startPolling();
     return job;
   }
-  async function submit(paper, lang, force, onUpdate) {
-    return watch(await api('/api/generate', { paper, lang, force: !!force }), onUpdate);
+  async function submit(paper, lang, force, onUpdate, scope) {
+    return watch(await api('/api/generate', { paper, lang, force: !!force, ...(scope ? { scope } : {}) }), onUpdate);
   }
   // what a PDF says it is, read in the browser: an arXiv id from its margin stamp, a DOI from its metadata or its
   // first page. Only the first page: the second is often the references, full of other papers' ids.
@@ -1119,6 +1119,11 @@
         submit(PAPER.id, lang, force, update).catch(update.fail);
       },
       fill(lang) { fillGaps(lang, true); },
+      // the appendix a body-first translation put off: asked for now, at the queue's low tier
+      deferred(lang) {
+        const update = toastFor(lang);
+        submit(PAPER.id, lang, false, update, 'appendix').catch(update.fail);
+      },
       // questions go to an agent on this computer, which can look them up on the web (reader.js: the switch by a question)
       askAgent() {
         const d = modelData, m = d && (d.models || []).find((x) => x.id === (d.askModel || d.selected));
@@ -1159,6 +1164,8 @@
     document.getElementById('go-t').textContent = T.generate;
     document.getElementById('sources').textContent = T.sources;
     document.getElementById('sources').title = T.sources_tip;
+    document.getElementById('bf-t').textContent = T.body_first;
+    document.getElementById('bf-wrap').title = T.body_first;
     document.getElementById('dropzone-t').textContent = T.drop_zone;
     document.getElementById('dropzone-k').textContent = T.drop_types;
     document.getElementById('zlib-open-t').textContent = T.z_lib;
@@ -1222,6 +1229,7 @@
       const cb = (j) => {
         if (latest !== mine) return;
         const T = t(), name = esc(label || jobName(j, T)), in_ = j.lang ? ` · ${esc(nameOf(j.lang))}` : '';
+        const sc = j.scope === 'body' ? ` <em class="stale">${esc(T.body_first)}</em>` : j.scope === 'appendix' ? ` <em class="stale">${esc(T.j_appendix)}</em>` : '';
         if (j.status === 'moved' && j.next) { watchers.set(j.next, cb); startPolling(); return; }   // (an arXiv paper without HTML: its PDF converts)
         if (j.status === 'error' && j.error === 'needs-engine') { engineCard(j.upload, label || j.title || j.pid); return; }
         if (j.status === 'error') {   // the network failed on the way: continued from there, what came is kept (fetch.py)
@@ -1237,7 +1245,7 @@
           if (j.kind === 'generate') card.querySelector('.jc-go').onclick = () => start(j.pid, label || j.title, j.lang);
           return;
         }
-        card.innerHTML = `<div class="jc-head"><div class="jc-t">${name}${in_}</div>
+        card.innerHTML = `<div class="jc-head"><div class="jc-t">${name}${in_}${sc}</div>
             <button type="button" class="jc-stop"${j.stopping ? ' disabled' : ''}>${esc(T.stop)}</button></div>
           <div class="jc-s">${esc(stageOf(j, T))}</div>
           <span class="sb-prog"><i style="width:${pct(j)}%"></i></span>${note ? `<div class="jc-n">${esc(note)}</div>` : ''}`;
@@ -1247,15 +1255,18 @@
       };
       return cb;
     }
-    async function start(ref, label, langOf) {
+    async function start(ref, label, langOf, scope) {
       const lang = langOf || sel.value, mine = {};
       latest = mine;
       card.hidden = false;
       try {
-        await submit(ref, lang, false, onCard(label, mine));
+        await submit(ref, lang, false, onCard(label, mine), scope);
         return true;
       } catch (x) { card.hidden = true; fail(errText(x.message)); return false; }
     }
+    // the landing's mode: a body-first generation puts each paper's appendix off (server.py's scopes), and the
+    // queue asks for it behind every other paper's body. The reader's choice, off unless the box is ticked
+    const bfScope = () => (document.getElementById('bodyfirst') || {}).checked ? 'body' : undefined;
     // a file that needs the engine: what it is and what it takes, and its install, in the card; once installed, the
     // file waiting for it converts (the server starts that), and the card follows the conversion
     function engineCard(upload, name) {
@@ -1324,7 +1335,7 @@
       if (!modelName) { fail(t().no_model); return; }   // connect a model first (the card below)
       // queued: the box is free for the next link. A link that was refused (bad, no model) stays in it to be
       // fixed; one the reader has already typed over while it waited is the reader's, and stays
-      if (await start(ref) && input.value.trim() === ref) input.value = '';
+      if (await start(ref, null, null, bfScope()) && input.value.trim() === ref) input.value = '';
     };
     // a file, from the drop zone or dropped anywhere on the page: one the engine reads is converted (no model is
     // needed to read it); a Markdown or text file is stored by the server, then generated
@@ -1336,7 +1347,7 @@
       if (!modelName) { fail(t().no_model); return; }
       try {
         const r = await importFile(file, sel.value);
-        start(r.paper, r.title);
+        start(r.paper, r.title, null, bfScope());
       } catch (x) { fail(errText(x.message)); }
     }
     // several at once: they go in one after another, and the card says what came of them; the page stays here, the

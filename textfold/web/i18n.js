@@ -526,6 +526,23 @@ window.DR_I18N = (() => {
     hi: ['अनूदित न हुए {n} अनुच्छेदों का अनुवाद हो रहा है', 'छूटे हुए {n} अनुच्छेदों का अनुवाद करें', '{n} अनूदित नहीं', 'नया नोट', 'पूरे पाठ पर आपका अपना नोट, किसी अंश पर नहीं: यह शीर्षक के पास रहता है'],
   };
   for (const [code, [a, b, c, d, e]] of Object.entries(GAP)) Object.assign(S[code], { gaps_filling: a, gaps_fill: b, gaps_tag: c, n_card: d, n_card_tip: e });
+  // a body-first translation's appendix, put off on purpose (store.assemble's "deferred"): it reads as written and
+  // says so; and the landing's mode, and the backfill job's name on a card
+  const DEFERRED = {
+    en: ['The appendix is not translated into this language yet; it reads as written.', 'Translate the appendix', 'appendix untranslated', 'Body first, then the appendix', 'appendix'],
+    zh: ['附录还没有这一语言的翻译，先按原文显示。', '翻译附录', '附录未译', '先翻正文，附录随后', '附录'],
+    'zh-Hant': ['附錄還沒有這一語言的翻譯，先按原文顯示。', '翻譯附錄', '附錄未譯', '先翻正文，附錄隨後', '附錄'],
+    ja: ['付録はまだこの言語に翻訳されていません。原文のまま表示されます。', '付録を翻訳', '付録未翻訳', 'まず本文を訳し、付録はその後で', '付録'],
+    ko: ['부록은 아직 이 언어로 번역되지 않았습니다. 원문 그대로 표시됩니다.', '부록 번역', '부록 미번역', '본문을 먼저 번역하고 부록이 뒤따릅니다', '부록'],
+    es: ['El apéndice aún no está traducido a este idioma; se lee tal como está escrito.', 'Traducir el apéndice', 'apéndice sin traducir', 'Primero el cuerpo, luego el apéndice', 'apéndice'],
+    fr: ['L’annexe n’est pas encore traduite dans cette langue ; elle se lit telle qu’écrite.', 'Traduire l’annexe', 'annexe non traduite', 'D’abord le corps, puis l’annexe', 'annexe'],
+    de: ['Der Anhang ist in dieser Sprache noch nicht übersetzt; er liest sich, wie er geschrieben ist.', 'Anhang übersetzen', 'Anhang unübersetzt', 'Erst der Haupttext, dann der Anhang', 'Anhang'],
+    pt: ['O apêndice ainda não está traduzido para este idioma; lê-se como está escrito.', 'Traduzir o apêndice', 'apêndice sem tradução', 'Primeiro o corpo, depois o apêndice', 'apêndice'],
+    it: ['L’appendice non è ancora tradotta in questa lingua; si legge così com’è scritta.', 'Traduci l’appendice', 'appendice non tradotta', 'Prima il corpo, poi l’appendice', 'appendice'],
+    ru: ['Приложение ещё не переведено на этот язык; оно читается как написано.', 'Перевести приложение', 'приложение не переведено', 'Сначала основной текст, потом приложение', 'приложение'],
+    hi: ['परिशिष्ट अभी इस भाषा में अनूदित नहीं है; यह लिखे अनुसार पढ़ा जाता है।', 'परिशिष्ट का अनुवाद करें', 'परिशिष्ट अनूदित नहीं', 'पहले मुख्य भाग, फिर परिशिष्ट', 'परिशिष्ट'],
+  };
+  for (const [code, [a, b, c, d, e]] of Object.entries(DEFERRED)) Object.assign(S[code], { deferred_notice: a, deferred_fill: b, deferred_tag: c, body_first: d, j_appendix: e });
   // a question's field and its turns: send it, stop it while the model answers, take a turn out of the conversation
   const turn = (w) => ({ n_send: w[0], n_stop: w[1], n_turn_del: w[2], n_turn_del_q: w[3] });
   const Q = {

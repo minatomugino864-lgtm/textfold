@@ -589,6 +589,9 @@ li.u > .side { left: calc(100% + 34px); }
 .langpick { position: relative; order: 3; flex: none; }
 .langbtn .caret { font-size: 10px; opacity: .7; }
 .langbtn em.stale, .lm-item em.stale { font-style: normal; font-weight: 500; color: var(--r-gap); }
+/* a body-first translation's appendix, put off on purpose: one quiet notice under the first such section */
+.defnote { margin: 2px 0 0; font: 450 12.5px/1.5 var(--sans); color: var(--r-gap); }
+.defnote .linkbtn { font: inherit; color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .langmenu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; min-width: 210px; max-height: min(70vh, 520px); overflow-y: auto;
   padding: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 16px 44px -18px rgba(40, 30, 10, .45); }
 .lm-item { display: flex; width: 100%; justify-content: space-between; align-items: baseline; gap: 12px; border: 0; background: none; text-align: left;
