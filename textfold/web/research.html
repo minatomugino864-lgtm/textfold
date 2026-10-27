@@ -59,6 +59,8 @@ button:hover { border-color: var(--accent); }
 .rel.suggested { border-color: #c9822e; background: #fffaf0; }
 .rel.suggested .rel-type::before { content: "? "; color: #c9822e; }
 .rel .accept { font-size: 12.5px; border-color: #2e6e4e; color: #2e6e4e; padding: 2px 8px; }
+.rel .src { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #f0e2c8; color: #8a5a1e; }
+.rel .src.ok { background: #e0eee6; color: #2e6e4e; }
 .pending { color: #c9822e; font-size: 13px; margin: 6px 0; }
 .rel .rm:hover { color: var(--bad); }
 #newrel summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
@@ -271,7 +273,10 @@ async function renderRelations(ws) {
     const box = document.createElement('div');
     box.className = 'rel' + (r.status === 'suggested' ? ' suggested' : '');
     const [fs, ts] = await Promise.all([anchorStatus(r.from.paper, r.from.unit), anchorStatus(r.to.paper, r.to.unit)]);
+    const fromModel = (r.origin || (r.status === 'suggested' ? 'model' : 'user')) === 'model';
     box.innerHTML = `<div class="rel-head"><span class="rel-type">${esc(r.type)}</span><span class="rel-id">${esc(r.id)}</span>
+        ${fromModel ? `<span class="src" title="${r.suggested_by ? esc('proposed by ' + (r.suggested_by.model || 'a model') + (r.suggested_by.when ? ', ' + r.suggested_by.when : '')) : 'proposed by a model'}">model</span>` : ''}
+        ${r.reviewed ? `<span class="src ok" title="confirmed ${esc(r.reviewed.when || '')}">confirmed</span>` : ''}
         ${r.status === 'suggested'
           ? `<button type="button" class="accept">Accept</button><button type="button" class="rm" title="Reject this suggestion">Reject</button>`
           : `<button type="button" class="rm" title="Delete this relation">Delete</button>`}</div>
@@ -432,8 +437,7 @@ function wireChips(root) {   // a chip in the matrix brings its relation up in t
 }
 
 function jumpTo(rid) {
-  const el = document.querySelector(`.rel .rm[title="Delete this relation"]`) && document.evaluate(
-    `//div[contains(@class,"rel")][.//text()[contains(., "${rid}")]]`, document, null, 9, null).singleNodeValue;
+  const el = [...document.querySelectorAll('.rel')].find((e) => (e.querySelector('.rel-id')?.textContent || '').trim() === rid);
   if (!el) return;
   el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   el.style.transition = 'box-shadow .2s'; el.style.boxShadow = '0 0 0 3px ' + (TYPE_COLOR[el.querySelector('.rel-type')?.textContent?.trim()] || '#8a5a1e');

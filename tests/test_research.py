@@ -320,7 +320,8 @@ class Server(unittest.TestCase):
 
 class Suggest(unittest.TestCase):
     """A run of model proposals: takeaways first, then verbatim quotations checked against the text — what the
-    check keeps is a suggestion, what it refuses lands in the ledger with its reason. No model is called."""
+    check keeps is a suggestion the reader still reviews; what it refuses lands in the ledger with its reason.
+    No model is called: the fake below speaks as one, and can lie, fail or overreach as one."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -343,36 +344,47 @@ class Suggest(unittest.TestCase):
             research.add_paper(ws, pid)
         return ws
 
-    def fake_llm(self):
-        """The model's shape: candidates first, then one evidence call per candidate that earns one. Good quotes
-        come out of the very texts the prompt carries; the fabricated run returns sentences of its own."""
+    def fake_llm(self, cands=None, fabricate=False, short=False, fail=(), on_call=None, reply_as_text=False):
+        """The model's shape, and its failings: candidates first, then one evidence call per candidate that gets
+        one. fail: the numbers of evidence calls (1-based) that raise; on_call: a hook run before each call (a
+        concurrent reader, in the threading test); fabricate/short: quotations the model made up or squeezed."""
         import re as _re
         calls = []
+        default = [
+            {"type": "extends", "from": {"paper": "2401.00010", "unit": "u0"},
+             "to": {"paper": "2401.00011", "unit": "u1"}, "why": "the second builds on the first"},
+            {"type": "supports", "from": {"paper": "2401.00010", "unit": "u1"},
+             "to": {"paper": "2401.00011", "unit": "u0"}, "why": "evidence for it"},
+            {"type": "cites", "from": {"paper": "2401.00010", "unit": "u0"},
+             "to": {"paper": "2401.00011", "unit": "u1"}, "why": "a duplicate of what the reader drew"},
+            {"type": "refutes", "from": {"paper": "2401.00010", "unit": "u0"},
+             "to": {"paper": "2401.00011", "unit": "u1"}, "why": "not a type the workspace offers"},
+        ]
+        n = [0]
 
         def fake(prompt, schema, cfg, cache_dir, force, system=None):
+            if on_call:
+                on_call(len(calls))
             calls.append(prompt[:40])
             if "Which relations hold BETWEEN" in prompt:
-                cands = [
-                    {"type": "extends", "from": {"paper": "2401.00010", "unit": "u0"},
-                     "to": {"paper": "2401.00011", "unit": "u1"}, "why": "the second builds on the first"},
-                    {"type": "supports", "from": {"paper": "2401.00010", "unit": "u1"},
-                     "to": {"paper": "2401.00011", "unit": "u0"}, "why": "evidence for it"},
-                    {"type": "cites", "from": {"paper": "2401.00010", "unit": "u0"},
-                     "to": {"paper": "2401.00011", "unit": "u1"}, "why": "a duplicate of what the reader drew"},
-                    {"type": "refutes", "from": {"paper": "2401.00010", "unit": "u0"},
-                     "to": {"paper": "2401.00011", "unit": "u1"}, "why": "not a type the workspace offers"},
-                ]
-                return {"out": {"candidates": cands}, "cost": 0.0}, False
+                out = {"candidates": (cands if cands is not None else default)}
+                return {"out": json.dumps(out) if reply_as_text else out, "cost": 0.0}, False
+            n[0] += 1
+            if n[0] in fail:
+                raise RuntimeError("the model's endpoint said no")
             texts = _re.findall(r"<<<\n(.*?)\n>>>", prompt, _re.S)
-            if fake.fabricate:
+            if fabricate:
                 return {"out": {"from_quote": "This sentence is the model's own and appears in neither text at all.",
                                 "to_quote": "Nor does this one, which is quite long enough to fail the check.",
                                 "note": "invented"}, "cost": 0.0}, False
+            if short:   # true words, but a fragment too short to prove anything: its own reason, not invented
+                return {"out": {"from_quote": " ".join(texts[0].split()[:3]),
+                                "to_quote": " ".join(texts[1].split()[:3]),
+                                "note": "too short to prove anything"}, "cost": 0.0}, False
             return {"out": {"from_quote": " ".join(texts[0].split())[:48],
                             "to_quote": " ".join(texts[1].split())[:48],
                             "note": "the two passages say the same of the method"}, "cost": 0.0}, False
         fake.calls = calls
-        fake.fabricate = False
         return fake
 
     def test_a_run_keeps_what_the_text_verifies_and_ledgers_the_rest(self):
@@ -384,7 +396,7 @@ class Suggest(unittest.TestCase):
         with mock.patch.object(llm, "call", fake):
             ws, ledger = research.suggest(ws, None, {"kind": "fake", "id": "fake"})
         self.assertEqual(ledger["candidates"], 4)
-        self.assertEqual(ledger["kept"], 2, ledger["dropped"])   # extends and supports both verify
+        self.assertEqual(ledger["kept"], 2, ledger["dropped"])
         self.assertEqual(ledger["calls"], 3)   # the candidates call + two candidates that earned a verification
         reasons = sorted(d["reason"].split(":")[0] for d in ledger["dropped"])
         self.assertEqual(reasons, ["duplicate", "unknown_type"])
@@ -394,10 +406,21 @@ class Suggest(unittest.TestCase):
         full = next(u["full"] for sec in doc["sections"] for u in sec["units"] if u["id"] == sug["from"]["unit"])
         self.assertIn(" ".join(sug["from"]["quote"]["exact"].split()), " ".join(full.split()))
 
-    def test_a_fabricated_quotation_is_dropped_with_its_reason(self):
+    def test_the_quote_kept_is_the_texts_own_words_not_the_models_casing(self):
         ws = self.workspace()
         fake = self.fake_llm()
-        fake.fabricate = True
+        with mock.patch.object(llm, "call", fake):
+            ws, ledger = research.suggest(ws, None, {"kind": "fake"})
+        sug = next(r for r in ws["relations"] if r["status"] == "suggested")
+        # the fake answered with the text's words; what is kept must sit in the unit verbatim (its own casing)
+        from textfold import fold
+        doc = fold.document("2401.00010", None)
+        full = next(u["full"] for sec in doc["sections"] for u in sec["units"] if u["id"] == sug["from"]["unit"])
+        self.assertIn(sug["from"]["quote"]["exact"], full)
+
+    def test_a_fabricated_quotation_is_dropped_with_its_reason(self):
+        ws = self.workspace()
+        fake = self.fake_llm(fabricate=True)
         with mock.patch.object(llm, "call", fake):
             ws, ledger = research.suggest(ws, None, {"kind": "fake"})
         self.assertEqual(ledger["kept"], 0)
@@ -405,23 +428,152 @@ class Suggest(unittest.TestCase):
         self.assertEqual([d["reason"] for d in ledger["dropped"] if "fabricated" in d["reason"]],
                          ["fabricated_quote"] * 3)
 
-    def test_accept_makes_it_the_readers_and_reject_removes_it(self):
+    def test_a_quotation_too_short_to_prove_anything_is_its_own_reason(self):
+        ws = self.workspace()
+        fake = self.fake_llm(short=True)
+        with mock.patch.object(llm, "call", fake):
+            ws, ledger = research.suggest(ws, None, {"kind": "fake"})
+        self.assertEqual(ledger["kept"], 0)
+        self.assertEqual([d["reason"] for d in ledger["dropped"] if "short" in d["reason"]],
+                         ["quote_too_short"] * 3)
+
+    def test_the_budget_counts_calls_attempted_failures_spent_too(self):
+        # eight candidates, every evidence call failing: the run may attempt 1 + 6 calls and stops there
+        cands = [{"type": t, "from": {"paper": "2401.00010", "unit": "u0"},
+                  "to": {"paper": "2401.00011", "unit": "u1"}, "why": "x"} for t in research.SUGGEST_TYPES] + [
+                 {"type": "extends", "from": {"paper": "2401.00010", "unit": "u1"},
+                  "to": {"paper": "2401.00011", "unit": "u0"}, "why": "x"},
+                 {"type": "supports", "from": {"paper": "2401.00010", "unit": "u1"},
+                  "to": {"paper": "2401.00011", "unit": "u0"}, "why": "x"},
+                 {"type": "qualifies", "from": {"paper": "2401.00010", "unit": "u1"},
+                  "to": {"paper": "2401.00011", "unit": "u0"}, "why": "x"}]
+        ws = self.workspace()
+        fake = self.fake_llm(cands=cands, fail=range(1, 7))
+        with mock.patch.object(llm, "call", fake):
+            ws, ledger = research.suggest(ws, None, {"kind": "fake"})
+        self.assertEqual(len(cands), 8)
+        self.assertEqual(ledger["calls"], research.RUN_CALLS)   # 1 + 6 attempts, every failure spent one
+        self.assertEqual(ledger["kept"], 0)
+        self.assertEqual(len([d for d in ledger["dropped"] if "evidence_call_failed" in d["reason"]]), 6)
+        self.assertEqual(len([d for d in ledger["dropped"] if d["reason"] == "over_budget"]), 2)
+        self.assertEqual(len(fake.calls), research.RUN_CALLS)   # the model was really asked no more than that
+
+    def test_a_partial_failure_spends_the_budget_all_the_same(self):
+        cands = [{"type": t, "from": {"paper": "2401.00010", "unit": "u0"},
+                  "to": {"paper": "2401.00011", "unit": "u1"}, "why": "x"} for t in research.SUGGEST_TYPES] + [
+                 {"type": "extends", "from": {"paper": "2401.00010", "unit": "u1"},
+                  "to": {"paper": "2401.00011", "unit": "u0"}, "why": "x"},
+                 {"type": "supports", "from": {"paper": "2401.00010", "unit": "u1"},
+                  "to": {"paper": "2401.00011", "unit": "u0"}, "why": "x"},
+                 {"type": "qualifies", "from": {"paper": "2401.00010", "unit": "u1"},
+                  "to": {"paper": "2401.00011", "unit": "u0"}, "why": "x"}]
+        ws = self.workspace()
+        fake = self.fake_llm(cands=cands, fail={1, 3, 5})   # attempts 1/3/5 fail; 2/4/6 succeed
+        with mock.patch.object(llm, "call", fake):
+            ws, ledger = research.suggest(ws, None, {"kind": "fake"})
+        self.assertEqual(ledger["calls"], research.RUN_CALLS)
+        self.assertEqual(ledger["kept"], 3)
+        self.assertEqual(len([d for d in ledger["dropped"] if "evidence_call_failed" in d["reason"]]), 3)
+        self.assertEqual(len([d for d in ledger["dropped"] if d["reason"] == "over_budget"]), 2)
+
+    def test_a_relation_the_reader_draws_while_the_model_thinks_is_never_lost(self):
+        ws = self.workspace()
+        rid_box = {}
+
+        def draw_mid_run(n):
+            if n == 2 and not rid_box:   # during the model's thinking: the reader draws the very relation the
+                def draw(w):             # third candidate would offer (it must not be duplicated either)
+                    r = research.add_relation(w, "cites", {"paper": "2401.00010", "unit": "u0"},
+                                              {"paper": "2401.00011", "unit": "u1"})
+                    rid_box["id"] = r["id"]
+                research.update(ws["id"], draw)
+
+        fake = self.fake_llm(on_call=draw_mid_run)
+        with mock.patch.object(llm, "call", fake):
+            ws, ledger = research.suggest(ws, None, {"kind": "fake"})
+        again = research.load(ws["id"])
+        ids = [r["id"] for r in again["relations"]]
+        self.assertIn(rid_box["id"], ids)                       # the reader's own relation survived the run
+        kinds = sorted(r["type"] for r in again["relations"])
+        self.assertEqual(len(again["relations"]), 3)            # user's + the two the model earned
+        self.assertEqual(kinds, ["cites", "extends", "supports"])
+        self.assertEqual(len(ids), len(set(ids)))               # and the merged one was not duplicated
+        self.assertEqual([d["reason"] for d in ledger["dropped"]].count("duplicate"), 1)
+
+    def test_a_suggestion_says_where_it_came_from_and_accept_says_the_reader_stands_behind_it(self):
+        ws = self.workspace()
+        research.add_relation(ws, "cites", {"paper": "2401.00010", "unit": "u1"},
+                              {"paper": "2401.00011", "unit": "u1"})   # the reader's own, for comparison
+        fake = self.fake_llm()
+        with mock.patch.object(llm, "call", fake):
+            ws, ledger = research.suggest(ws, None, {"kind": "fake", "id": "fake"})
+        rid = ledger["added"][0]
+        sug = next(r for r in ws["relations"] if r["id"] == rid)
+        self.assertEqual((sug["origin"], sug["status"]), ("model", "suggested"))
+        self.assertEqual(sug["suggested_by"]["model"], "fake")   # which model proposed it, kept
+        self.assertTrue(sug["suggested_by"]["when"])
+        research.accept_relation(ws, rid)
+        again = research.load(ws["id"])
+        acc = next(r for r in again["relations"] if r["id"] == rid)
+        self.assertEqual((acc["status"], acc["origin"]), ("user", "model"))   # confirmed, and still the model's
+        self.assertTrue(acc["reviewed"]["when"])
+        self.assertEqual(acc["suggested_by"]["model"], "fake")
+        self.assertTrue("proposed by fake" in research.export_markdown(again))   # the export says so too
+        with self.assertRaises(ValueError):
+            research.accept_relation(ws, rid)   # a relation the reader stands behind is not confirmed twice
+        mine = next(r for r in again["relations"] if r["id"] != rid)
+        self.assertEqual(research.origin_of(mine), "user")   # the reader's own is the reader's
+        self.assertEqual(research.origin_of({"status": "user"}), "user")
+        self.assertEqual(research.origin_of({"status": "suggested"}), "model")
+
+    def test_a_rejected_suggestion_is_not_offered_again(self):
         ws = self.workspace()
         fake = self.fake_llm()
         with mock.patch.object(llm, "call", fake):
             ws, ledger = research.suggest(ws, None, {"kind": "fake"})
-        rid = ledger["added"][0]
-        research.accept_relation(ws, rid)
+        research.remove_relation(ws, ledger["added"][0])   # the reader rejects the extends one
+        fake2 = self.fake_llm()
+        with mock.patch.object(llm, "call", fake2):
+            ws, ledger2 = research.suggest(ws, None, {"kind": "fake"})
         again = research.load(ws["id"])
-        self.assertEqual(next(r for r in again["relations"] if r["id"] == rid)["status"], "user")
-        with self.assertRaises(ValueError):
-            research.accept_relation(ws, rid)   # a user's relation is not a suggestion to confirm twice
-        ws2 = self.workspace()
-        with mock.patch.object(llm, "call", fake):
-            ws2, ledger2 = research.suggest(ws2, None, {"kind": "fake"})
-        research.remove_relation(ws2, ledger2["added"][0])
-        self.assertEqual(len([r for r in research.load(ws2["id"])["relations"] if r["status"] == "suggested"]),
-                         len(ledger2["added"]) - 1)
+        kinds = sorted((r["type"], r["from"]["unit"], r["to"]["unit"]) for r in again["relations"])
+        # what was rejected is not offered again; the run earns nothing new — every candidate is either the
+        # rejected one (remembered) or one already proposed and waiting
+        self.assertNotIn(("extends", "u0", "u1"), kinds)
+        self.assertEqual(kinds, [("cites", "u0", "u1"), ("supports", "u1", "u0")])
+        self.assertEqual(ledger2["kept"], 0, ledger2)
+        dupes = [d for d in ledger2["dropped"] if d["reason"] == "duplicate"]
+        self.assertEqual(len(dupes), 3)
+        self.assertTrue(any(d["candidate"]["type"] == "extends" for d in dupes))   # the rejected one, remembered
+
+    def test_a_bad_reply_drops_its_candidate_not_the_run(self):
+        # the model answering as JSON text is still read; a candidate that is not a shape is dropped; a reply
+        # with nothing readable ends the run with its reason — and no exception leaves here
+        ws = self.workspace()
+        good = {"type": "extends", "from": {"paper": "2401.00010", "unit": "u0"},
+                "to": {"paper": "2401.00011", "unit": "u1"}, "why": "x"}
+        cases = [
+            (json.dumps({"candidates": [good]}), 1, "an answer as JSON text"),
+            ({"candidates": ["nonsense", good]}, 1, "one candidate that is not a shape"),
+            ({"candidates": "not a list"}, 0, "a list that is not one"),
+            ({}, 0, "nothing to read"),
+        ]
+        for out, want_kept, why in cases:
+            with self.subTest(why=why):
+                ws = self.workspace()
+                fake = self.fake_llm(cands=None if isinstance(out, str) else None)   # replaced below
+
+                def speak(prompt, schema, cfg, cache_dir, force, system=None):
+                    if "Which relations hold BETWEEN" in prompt:
+                        return {"out": out, "cost": 0.0}, False
+                    texts = __import__("re").findall(r"<<<\n(.*?)\n>>>", prompt, __import__("re").S)
+                    return {"out": {"from_quote": " ".join(texts[0].split())[:48],
+                                    "to_quote": " ".join(texts[1].split())[:48]}, "cost": 0.0}, False
+                with mock.patch.object(llm, "call", speak):
+                    ws, ledger = research.suggest(ws, None, {"kind": "fake", "id": "fake"})
+                self.assertEqual(ledger["kept"], want_kept, ledger)
+                if not want_kept:
+                    self.assertTrue(any("bad_reply" in d["reason"] for d in ledger["dropped"]), ledger)
 
     def test_the_boundaries_a_run_refuses(self):
         ws = research.create("W")
@@ -431,6 +583,14 @@ class Suggest(unittest.TestCase):
         ws2 = self.workspace()
         with self.assertRaises(RuntimeError):   # no model, no run
             research.suggest(ws2, None, None)
+        # a candidate naming a unit the text has not spends no call on its evidence
+        fake = self.fake_llm(cands=[{"type": "extends", "from": {"paper": "2401.00010", "unit": "u999"},
+                                     "to": {"paper": "2401.00011", "unit": "u1"}, "why": "x"}])
+        ws3 = self.workspace()
+        with mock.patch.object(llm, "call", fake):
+            _, ledger = research.suggest(ws3, None, {"kind": "fake"})
+        self.assertEqual(ledger["calls"], 1)
+        self.assertEqual(ledger["dropped"][0]["reason"], "unknown_unit")
 
 
 if __name__ == "__main__":

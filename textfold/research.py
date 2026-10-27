@@ -93,11 +93,17 @@ def load(wid):
         return None
     if not isinstance(ws, dict) or ws.get("format") != FORMAT:
         return None
-    if not (isinstance(ws.get("papers"), list) and isinstance(ws.get("relations"), list)
-            and isinstance(ws.get("name"), str) and all(isinstance(r, dict) and isinstance(r.get("id"), str)
-                                                        for r in ws["relations"])):
+    if ws.get("id") != wid or not (isinstance(ws.get("papers"), list) and isinstance(ws.get("relations"), list)
+                                   and isinstance(ws.get("name"), str) and all(_relation_ok(r) for r in ws["relations"])):
         return None   # not a shape this version reads; the file is left as it is, for looking at
     return ws
+
+
+def _relation_ok(r):
+    """What a relation has to carry to be one of this version's: its kind, and both ends as anchors."""
+    return (isinstance(r, dict) and isinstance(r.get("id"), str) and isinstance(r.get("type"), str)
+            and all(isinstance(a, dict) and isinstance(a.get("paper"), str) and isinstance(a.get("unit"), str)
+                    for a in (r.get("from"), r.get("to"))))
 
 
 def update(wid, fn):
@@ -174,7 +180,7 @@ def add_relation(ws, rtype, frm, to, note=""):
         for a in (frm, to):
             if a["paper"] not in {q["id"] for q in ws["papers"]}:
                 raise ValueError("paper not in the workspace")
-        rel = {"id": f"r-{uuid.uuid4().hex[:8]}", "type": rtype, "status": "user",
+        rel = {"id": f"r-{uuid.uuid4().hex[:8]}", "type": rtype, "status": "user", "origin": "user",
                "from": frm, "to": to,
                "note": str(note or "").strip()[:2000], "created": _now(), "updated": _now()}
         ws["relations"].append(rel)
@@ -182,28 +188,47 @@ def add_relation(ws, rtype, frm, to, note=""):
         return rel
 
 
+def origin_of(r):
+    """Who proposed a relation: the reader ("user"), or a model — with the reader holding either one only
+    since it was reviewed. An old relation without the field reads by its status, as it was written."""
+    return r.get("origin") or ("model" if r.get("status") == "suggested" else "user")
+
+
 def accept_relation(ws, rid):
-    """A suggested relation the reader has confirmed: it becomes one the reader holds, as any other."""
+    """A suggested relation the reader has confirmed: it becomes one the reader holds — and stays what it is,
+    a model's proposal the reader stands behind (origin and suggested_by keep that, reviewed says when)."""
     with _LOCK:
         for r in ws["relations"]:
             if r["id"] == rid:
                 if r.get("status") != "suggested":
                     raise ValueError("not a suggestion")
                 r["status"] = "user"
+                r.setdefault("origin", "model")   # (an old suggestion was the model's, as this one is)
+                r["reviewed"] = {"when": _now()}
                 r["updated"] = _now()
                 _write(ws)
                 return r
         raise ValueError("no such relation")
 
 
+def _dismiss_key(r):
+    return f"{r['type']}|{r['from']['paper']}|{r['from']['unit']}|{r['to']['paper']}|{r['to']['unit']}"
+
+
 def remove_relation(ws, rid):
+    """A relation taken back. A suggestion the reader rejected is remembered by what it proposed (DISMISS_KEEP
+    of them), so the next run of suggest does not offer the same relation again; a user's own is simply gone."""
     with _LOCK:
         if not RID_RE.fullmatch(rid or ""):
             raise ValueError("no such relation")
         kept = ws["relations"]
+        gone = next((r for r in kept if r["id"] == rid), None)
         ws["relations"] = [r for r in kept if r["id"] != rid]
-        if len(ws["relations"]) == len(kept):
+        if gone is None:
             raise ValueError("no such relation")
+        if gone.get("status") == "suggested":
+            ws["dismissed"] = (ws.get("dismissed") or [])[-DISMISS_KEEP + 1:] + [
+                {"key": _dismiss_key(gone), "when": _now()}]
         _write(ws)
         return ws
 
@@ -237,7 +262,10 @@ def export_markdown(ws, lang="en"):
     if ws["relations"]:
         L.append("## Relations\n")
         for r in ws["relations"]:
-            L.append(f"### {r['type']} — `{r['id']}` ({r.get('status') or 'user'})\n")
+            who = r.get("suggested_by") or {}
+            how = f", proposed by {who.get('model') or 'a model'}" if origin_of(r) == "model" else ""
+            stood = f", confirmed {r['reviewed']['when']}" if (r.get("reviewed") or {}).get("when") else ""
+            L.append(f"### {r['type']} — `{r['id']}` ({r.get('status') or 'user'}{how}{stood})\n")
             L.append(f"- {REL_TYPES.get(r['type'], 'a relation')}")
             for side in ("from", "to"):
                 a = r[side]
@@ -257,12 +285,12 @@ def export_markdown(ws, lang="en"):
 # before anything is kept. A proposal never becomes a relation the reader holds until the reader confirms it.
 
 CANDIDATE_CAP = 8          # candidates the first phase may propose
-VERIFY_CAP = 6             # candidates the second phase may ask about: 1 + VERIFY_CAP calls per run, at most
+VERIFY_CAP = 6             # evidence calls a run may attempt: 1 candidates call + 6 evidence calls, at most
+RUN_CALLS = 1 + VERIFY_CAP # the run's budget in calls ATTEMPTED — a call that failed spent it too
+QUOTE_MIN = 24             # a quotation too short proves little, and is refused as its own reason
+DISMISS_KEEP = 200         # rejections a workspace remembers (bounded)
 SUGGEST_TYPES = ("extends", "supports", "qualifies", "shares_method", "cites")   # (contradicts is not offered)
 
-
-def _norm(t):
-    return " ".join((t or "").split()).casefold()
 
 
 def _unit_rows(papers):
@@ -332,16 +360,31 @@ def _evidence_prompt(cand, rows):
             "\"note\": \"why the two quotations together support the relation, in one sentence\"}.")
 
 
-def _verified(quote, full):
-    """The quotation must be the text's own words: a whitespace-insensitive substring of the very unit."""
-    q, f = _norm(quote), _norm(full)
-    return bool(q) and len(q) >= 24 and q in f
+def _evidence_span(quote, full):
+    """(span, verdict): the model's quotation found in the very text gives the text's own words to keep — its
+    casing, its spacing, exactly as the paper writes it. An empty or unfound quotation is invented ("fabricated");
+    one found but too short to prove anything is refused as its own reason, not as an invention."""
+    q = " ".join((quote or "").split())
+    if not q:
+        return None, "fabricated_quote"
+    m = re.search(r"\s+".join(map(re.escape, q.split())), full or "", re.I)
+    if not m:
+        return None, "fabricated_quote"
+    if len(q) < QUOTE_MIN:
+        return None, "quote_too_short"
+    return m.group(0), None
 
 
 def suggest(ws, papers=None, cfg=None, cache_dir=None, log=lambda *a: None):
     """A run of model proposals, as the plan bounds it: one candidates call over the takeaways, then one call
     per candidate for verbatim quotations, each checked against the quoted text. What survives lands as
-    "suggested"; what does not lands in the ledger, with the reason. Returns (workspace, ledger)."""
+    "suggested" with the model's name on it; what does not lands in the ledger, with the reason. Returns
+    (workspace, ledger).
+
+    The model calls run without any lock held — a run takes minutes and the reader is still working. The
+    workspace on disk is read fresh at the end and what the run earned is merged into THAT: a relation the
+    reader drew while the model was thinking is kept, never overwritten. The run's budget is calls attempted,
+    1 + VERIFY_CAP at most, failures spent too; one bad reply drops its candidate, never the run."""
     from . import llm
     if cfg is None:
         raise RuntimeError("no model")
@@ -350,59 +393,116 @@ def suggest(ws, papers=None, cfg=None, cache_dir=None, log=lambda *a: None):
     if len(papers) < 2:
         raise ValueError("a suggestion wants two papers in the workspace at least")
     ledger = {"candidates": 0, "kept": 0, "calls": 0, "cost": 0.0, "dropped": [], "added": []}
-    rows = _unit_rows(papers)
-    rec, cached = llm.call(_candidates_prompt(papers, rows), CANDIDATE_SCHEMA, cfg, cache_dir, False,
-                           system=llm.system_for({"title": ws["name"]}))
+    try:
+        rows = _unit_rows(papers)
+    except Exception as e:
+        raise ValueError(f"cannot read the papers' text: {e}")
+    model_label = (cfg.get("id") if isinstance(cfg, dict) else None) or "a model"   # (whose proposal it is)
+    system = llm.system_for({"title": ws["name"]})
+
+    try:
+        rec, cached = llm.call(_candidates_prompt(papers, rows), CANDIDATE_SCHEMA, cfg, cache_dir, False,
+                               system=system)
+    except Exception as e:   # the whole run's first call failing is a run with nothing to show, said so
+        ledger["calls"] += 1
+        ledger["dropped"].append({"reason": f"candidates_call_failed: {str(e)[:120]}"})
+        return ws, ledger
     ledger["calls"] += 1
     ledger["cost"] += 0 if cached else (rec.get("cost") or 0)
-    cands = (rec["out"].get("candidates") or [])[:CANDIDATE_CAP]
-    have = {(r["type"], r["from"]["paper"], r["from"]["unit"], r["to"]["paper"], r["to"]["unit"])
-            for r in ws["relations"]}
-    kept = 0
+    out = rec.get("out") if isinstance(rec, dict) else None
+    if isinstance(out, str):   # a model that answered as JSON text rather than an object
+        try:
+            out = json.loads(out)
+        except ValueError:
+            out = None
+    cands = (out or {}).get("candidates") if isinstance(out, dict) else None
+    if not isinstance(cands, list):
+        ledger["dropped"].append({"reason": "bad_reply: no candidates to read"})
+        return ws, ledger
+    cands = cands[:CANDIDATE_CAP]
+
+    # what the run already knows is taken or refused (the disk gets its own check at the merge)
+    have = {_dismiss_key(r) for r in ws["relations"]} | {d["key"] for d in ws.get("dismissed", []) if isinstance(d, dict)}
+    rows_by_key = {(r["paper"], r["unit"]): r["full"] for pid in rows for r in rows[pid]}
+    earned = []   # (type, from anchor, to anchor, from span, to span, note) — merged at the end, in the lock
     for c in cands:
+        if not isinstance(c, dict):
+            ledger["dropped"].append({"candidate": None, "reason": "bad_reply: a candidate that is not a shape"})
+            continue
         ledger["candidates"] += 1
-        why = {"type": c.get("type"), "from": c.get("from") or {}, "to": c.get("to") or {}}
-        if why["type"] not in SUGGEST_TYPES:
-            ledger["dropped"].append({"candidate": why, "reason": "unknown_type"})
+        parsed = {"type": c.get("type"), "from": c.get("from") or {}, "to": c.get("to") or {},
+                  "why": c.get("why") or ""}
+        if parsed["type"] not in SUGGEST_TYPES:
+            ledger["dropped"].append({"candidate": parsed, "reason": "unknown_type"})
             continue
         try:
-            f, t = _clean_anchor({"paper": why["from"].get("paper"), "unit": why["from"].get("unit"),
-                                  "section": "", "quote": {}}), _clean_anchor({"paper": why["to"].get("paper"),
-                                  "unit": why["to"].get("unit"), "section": "", "quote": {}})
+            f = _clean_anchor({"paper": parsed["from"].get("paper"), "unit": parsed["from"].get("unit"),
+                               "section": "", "quote": {}})
+            t = _clean_anchor({"paper": parsed["to"].get("paper"), "unit": parsed["to"].get("unit"),
+                               "section": "", "quote": {}})
         except ValueError as e:
-            ledger["dropped"].append({"candidate": why, "reason": f"bad_anchor: {e}"})
+            ledger["dropped"].append({"candidate": parsed, "reason": f"bad_anchor: {e}"})
             continue
-        if (why["type"], f["paper"], f["unit"], t["paper"], t["unit"]) in have:
-            ledger["dropped"].append({"candidate": why, "reason": "duplicate"})
+        key = "|".join((parsed["type"], f["paper"], f["unit"], t["paper"], t["unit"]))
+        if key in have:
+            ledger["dropped"].append({"candidate": parsed, "reason": "duplicate"})
             continue
-        if kept >= VERIFY_CAP:
-            ledger["dropped"].append({"candidate": why, "reason": "over_budget"})
+        if (f["paper"], f["unit"]) not in rows_by_key or (t["paper"], t["unit"]) not in rows_by_key:
+            ledger["dropped"].append({"candidate": parsed, "reason": "unknown_unit"})   # no text, no call spent
+            continue
+        if ledger["calls"] >= RUN_CALLS:   # the budget is attempts spent — failures count too
+            ledger["dropped"].append({"candidate": parsed, "reason": "over_budget"})
             continue
         try:
-            frec, cached = llm.call(_evidence_prompt(why, rows), EVIDENCE_SCHEMA, cfg, cache_dir, False,
-                                    system=llm.system_for({"title": ws["name"]}))
-        except Exception as e:   # one candidate's evidence call failing drops that candidate, not the run
-            ledger["dropped"].append({"candidate": why, "reason": f"evidence_call_failed: {str(e)[:120]}"})
+            frec, cached = llm.call(_evidence_prompt(parsed, rows), EVIDENCE_SCHEMA, cfg, cache_dir, False,
+                                    system=system)
+        except Exception as e:   # one candidate's evidence call failing drops that candidate, not the run —
+            ledger["calls"] += 1          # and it spent its share of the budget all the same
+            ledger["cost"] += 0
+            ledger["dropped"].append({"candidate": parsed, "reason": f"evidence_call_failed: {str(e)[:120]}"})
             continue
         ledger["calls"] += 1
         ledger["cost"] += 0 if cached else (frec.get("cost") or 0)
-        out = frec["out"]
-        fq, tq = out.get("from_quote") or "", out.get("to_quote") or ""
-        ffull = next((r["full"] for r in rows[f["paper"]] if r["unit"] == f["unit"]), "")
-        tfull = next((r["full"] for r in rows[t["paper"]] if r["unit"] == t["unit"]), "")
-        if not (_verified(fq, ffull) and _verified(tq, tfull)):
-            ledger["dropped"].append({"candidate": why, "reason": "fabricated_quote"})
+        fout = frec.get("out") if isinstance(frec, dict) else None
+        if isinstance(fout, str):
+            try:
+                fout = json.loads(fout)
+            except ValueError:
+                fout = None
+        fout = fout if isinstance(fout, dict) else {}
+        fq, tq = fout.get("from_quote") or "", fout.get("to_quote") or ""
+        fspan, fverdict = _evidence_span(fq, rows_by_key[(f["paper"], f["unit"])])
+        tspan, tverdict = _evidence_span(tq, rows_by_key[(t["paper"], t["unit"])])
+        if fverdict or tverdict:
+            ledger["dropped"].append({"candidate": parsed, "reason": fverdict or tverdict})
             continue
-        rel = {"id": f"r-{uuid.uuid4().hex[:8]}", "type": why["type"], "status": "suggested",
-               "from": {**f, "quote": {"exact": fq.strip()[:300], "prefix": "", "suffix": ""}},
-               "to": {**t, "quote": {"exact": tq.strip()[:300], "prefix": "", "suffix": ""}},
-               "note": str(out.get("note") or why.get("why") or "").strip()[:2000],
-               "created": _now(), "updated": _now()}
-        ws["relations"].append(rel)
-        have.add((why["type"], f["paper"], f["unit"], t["paper"], t["unit"]))
-        ledger["kept"] += 1
-        ledger["added"].append(rel["id"])
-        kept += 1
+        have.add(key)
+        earned.append((parsed, f, t, fspan, tspan, str(fout.get("note") or parsed["why"]).strip()[:2000]))
+
+    # the merge, in the short lock, into the workspace as it stands NOW: nothing the reader did is lost
+    def merge(w):
+        fresh = {_dismiss_key(r) for r in w["relations"]} | {d["key"] for d in w.get("dismissed", []) if isinstance(d, dict)}
+        for parsed, f, t, fspan, tspan, note in earned:
+            key = "|".join((parsed["type"], f["paper"], f["unit"], t["paper"], t["unit"]))
+            if key in fresh:
+                ledger["dropped"].append({"candidate": parsed, "reason": "duplicate"})   # drawn while we asked
+                continue
+            fresh.add(key)
+            w["relations"].append({
+                "id": f"r-{uuid.uuid4().hex[:8]}", "type": parsed["type"], "status": "suggested",
+                "origin": "model", "suggested_by": {"model": model_label, "when": _now()},
+                "from": {**f, "quote": {"exact": fspan[:300], "prefix": "", "suffix": ""}},
+                "to": {**t, "quote": {"exact": tspan[:300], "prefix": "", "suffix": ""}},
+                "note": note, "created": _now(), "updated": _now()})
+            ledger["kept"] += 1
+            ledger["added"].append(w["relations"][-1]["id"])
+        _write(w)
+        return w
+
     with _LOCK:
-        _write(ws)
+        fresh = load(ws["id"])
+        if fresh is None:   # the workspace was deleted while the model was thinking: it stays deleted
+            ledger["dropped"].append({"reason": "workspace_deleted_mid_run"})
+            return ws, ledger
+        ws = merge(fresh)
     return ws, ledger

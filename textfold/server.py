@@ -1016,8 +1016,8 @@ def make_handler(jobs):
                             w["name"] = body["name"].strip()[:200]
                         if isinstance(body.get("question"), str):
                             w["question"] = body["question"].strip()[:2000]
-                        if not body.get("add_paper") and not body.get("remove_paper") and ("name" in body or "question" in body):
-                            research._write(w)   # (a rename alone still goes to disk)
+                        if "name" in body or "question" in body:
+                            research._write(w)   # (a rename with other changes still goes to disk)
                     try:
                         ws = research.update(m.group(1), change)
                     except ValueError as e:
