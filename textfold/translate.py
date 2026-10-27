@@ -228,11 +228,15 @@ def _ask(doc, lang, tasks, cfg, cache_dir, jobs, log, tick, force, stop, again=F
     return cost, errors, warnings
 
 
-def _again(doc, lang):
-    """The gaps as parts to ask: by section, a section's missing paragraphs in as few runs as fit PART_CHARS."""
+def _again(doc, lang, body_only=False):
+    """The gaps as parts to ask: by section, a section's missing paragraphs in as few runs as fit PART_CHARS.
+    body_only (the body-first experiment's skip strategy, inside the initial build) leaves the appendix's
+    paragraphs to the later fill; the fill itself asks for everything."""
     missing = set(gaps(doc, lang))
     tasks = []
     for c in doc["chunks"]:
+        if body_only and c.get("app") is True:
+            continue
         us = [uid for uid in c["units"] if uid in missing]
         if us:
             tasks += [(c, k, run) for k, run in enumerate(parts(doc, {**c, "units": us}))]
@@ -273,18 +277,20 @@ def build(doc, lang, cfg, cache_dir, jobs=4, log=print, progress=None, force=Fal
     mode = _body_first_mode()
     if mode == "order":   # the body's parts dispatched first; with jobs > 1 the completions still interleave
         tasks = [t for t in tasks if t[0].get("app") is not True] + [t for t in tasks if t[0].get("app") is True]
+    elif mode == "skip":   # the appendix's translation left as real gaps: the reader's open-and-fill asks for it
+        tasks = [t for t in tasks if t[0].get("app") is not True]
     tick, more = _counter(progress, len(tasks))
     cost, errors, warnings = _ask(doc, lang, tasks, cfg, cache_dir, jobs, log, tick, force, stop)
     if tasks and len(errors) == len(tasks):
         raise RuntimeError(str(errors[0]))
-    retry = _again(doc, lang)
+    retry = _again(doc, lang, body_only=(mode == "skip"))   # the skipped appendix is not refilled in this build
     if retry:
         log(f"  ~ {lang}: {len(gaps(doc, lang))} paragraphs without a translation, asked again")
         more(len(retry))
         c2, _, w2 = _ask(doc, lang, retry, cfg, cache_dir, jobs, log, tick, force, stop, again=True)
         cost += c2
         warnings += w2
-    cost += _titles(doc, lang, cfg, cache_dir, force, log)
+    cost += _titles(doc, lang, cfg, cache_dir, force, log, body_only=(mode == "skip"))
     for w in warnings:
         log(f"  ~ {lang} {w}")
     return cost
@@ -306,11 +312,13 @@ def fill(doc, lang, cfg, cache_dir, jobs=4, log=print, progress=None, stop=None)
     return cost
 
 
-def _titles(doc, lang, cfg, cache_dir, force, log):
+def _titles(doc, lang, cfg, cache_dir, force, log, body_only=False):
     """Headings with no text of their own ("2 Experiments"), and the paper title when it came back untranslated, in
-    one call. Its cost."""
+    one call. Its cost. body_only (the skip strategy, inside the initial build) leaves the appendix's headings to
+    the later fill."""
     meta, L = doc["meta"], langs.name(lang)
-    bare = [c for c in doc["chunks"] if lang not in c.get("tr", {}) and c["title"]]
+    bare = [c for c in doc["chunks"]
+            if (not body_only or c.get("app") is not True) and lang not in c.get("tr", {}) and c["title"]]
     if meta["titles"].get(lang) == meta["title"]:
         meta["titles"].pop(lang)  # the section call sometimes hands the English title back
     titles = [c["title"] for c in bare] + ([] if meta["titles"].get(lang) else [meta["title"]])
