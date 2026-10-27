@@ -10,6 +10,7 @@ parallel. The section's own lines come with the first part. What comes back with
 failed, a paragraph the model left out) is asked for once more, the paragraphs alone; a translation stored with gaps
 still (gaps) has them asked for the next time its language is generated (fill), the rest kept.
 """
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 
@@ -255,12 +256,23 @@ def _counter(progress, total):
     return tick, more
 
 
+def _body_first_mode():
+    """The body-first experiment's knob (issue #84's smaller step): the bench sets it, and an upstream patch —
+    if the measurement earns one — makes the behavior the default and drops this. "" asks as upstream always
+    has; "order" sends the body's parts before the appendix's; "skip" does not ask for the appendix's
+    translation at all and leaves it as real gaps for the reader's open-and-fill."""
+    return os.environ.get("TEXTFOLD_BODY_FIRST", "")
+
+
 def build(doc, lang, cfg, cache_dir, jobs=4, log=print, progress=None, force=False, stop=None):
     """The paper in lang, section by section; then what came back without a translation is asked for once more (the
     paragraphs alone), so one failed call or a paragraph left out does not leave English in the translation."""
     meta = doc["meta"]
     meta.setdefault("titles", {})
     tasks = [(c, k, us) for c in doc["chunks"] if c["units"] for k, us in enumerate(parts(doc, c))]   # (a short section is one part: its prompt is as before)
+    mode = _body_first_mode()
+    if mode == "order":   # the body's parts dispatched first; with jobs > 1 the completions still interleave
+        tasks = [t for t in tasks if t[0].get("app") is not True] + [t for t in tasks if t[0].get("app") is True]
     tick, more = _counter(progress, len(tasks))
     cost, errors, warnings = _ask(doc, lang, tasks, cfg, cache_dir, jobs, log, tick, force, stop)
     if tasks and len(errors) == len(tasks):
