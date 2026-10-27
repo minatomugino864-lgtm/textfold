@@ -8,7 +8,10 @@
   GET  /api/research          the research workspaces (research.py): each a set of papers and the relations between
   POST /api/research          {name, question?}: make one. GET /api/research/<id>: the whole of it;
                               POST {add_paper | remove_paper | name?, question?}: its set and its words;
-                              POST .../relations {type, from, to, note} draws one, {op: "remove", id} takes it back;
+                              POST .../relations {type, from, to, note} draws one, {op: "remove", id} takes it back,
+                              {op: "accept", id} confirms a suggestion; POST .../suggest asks the reader's model for
+                              suggested relations (research.suggest: takeaways first, then verbatim quotations
+                              checked against the text — suggestions stay suggestions until the reader accepts);
                               GET .../export?format=md|json: the workspace as Markdown with textfold:// links, or as itself
   POST /api/jobs/stop         {id}: stop a job: a queued one is dropped; a running one ends once the model calls under way
                               return (what they wrote is kept in the cache, so starting it again goes on from there)
@@ -1037,6 +1040,33 @@ def make_handler(jobs):
                     if not ws:
                         return self.json({"error": "no such workspace"}, 404)
                     return self.json(ws if body.get("op") == "remove" else {"workspace": ws, "relation": ws["relations"][-1]})
+                m = re.fullmatch(r"/api/research/(rw-[0-9a-f]{10})/relations/accept", u.path)
+                if m:
+                    if not isinstance(body, dict):
+                        return self.json({"error": "bad body"}, 400)
+                    try:
+                        ws = research.update(m.group(1), lambda w: research.accept_relation(w, str(body.get("id") or "")))
+                    except ValueError as e:
+                        return self.json({"error": str(e)}, 400)
+                    return self.json(ws) if ws else self.json({"error": "no such workspace"}, 404)
+                m = re.fullmatch(r"/api/research/(rw-[0-9a-f]{10})/suggest", u.path)
+                if m:
+                    if not isinstance(body, dict):
+                        return self.json({"error": "bad body"}, 400)
+                    try:
+                        spec = models.resolve(None)   # the reader's model, as generations use
+                    except RuntimeError:
+                        return self.json({"error": "no-model"}, 400)
+                    ws = research.load(m.group(1))
+                    if not ws:
+                        return self.json({"error": "no such workspace"}, 404)
+                    asked = body.get("papers") if isinstance(body.get("papers"), list) else None
+                    try:
+                        ws, ledger = research.suggest(ws, asked, spec, store.DATA / "research" / m.group(1) / "llm-cache",
+                                                      log=lambda line: None)
+                    except ValueError as e:
+                        return self.json({"error": str(e)}, 400)
+                    return self.json({"workspace": ws, "ledger": ledger})
                 self.json({"error": "not found"}, 404)
             except Exception as e:
                 self.json({"error": str(e)}, 500)

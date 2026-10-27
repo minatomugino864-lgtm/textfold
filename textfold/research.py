@@ -182,6 +182,20 @@ def add_relation(ws, rtype, frm, to, note=""):
         return rel
 
 
+def accept_relation(ws, rid):
+    """A suggested relation the reader has confirmed: it becomes one the reader holds, as any other."""
+    with _LOCK:
+        for r in ws["relations"]:
+            if r["id"] == rid:
+                if r.get("status") != "suggested":
+                    raise ValueError("not a suggestion")
+                r["status"] = "user"
+                r["updated"] = _now()
+                _write(ws)
+                return r
+        raise ValueError("no such relation")
+
+
 def remove_relation(ws, rid):
     with _LOCK:
         if not RID_RE.fullmatch(rid or ""):
@@ -235,3 +249,160 @@ def export_markdown(ws, lang="en"):
     else:
         L.append("## Relations\n\nNone yet.\n")
     return "\n".join(L)
+
+
+# ── a model's proposals ───────────────────────────────────────────────────────────────────────────────────────
+# Deliberately the only road to a "suggested" relation, and a narrow one: the model sees takeaways and proposes
+# candidates, then must quote each side's own text verbatim, and the quotation is checked against that text
+# before anything is kept. A proposal never becomes a relation the reader holds until the reader confirms it.
+
+CANDIDATE_CAP = 8          # candidates the first phase may propose
+VERIFY_CAP = 6             # candidates the second phase may ask about: 1 + VERIFY_CAP calls per run, at most
+SUGGEST_TYPES = ("extends", "supports", "qualifies", "shares_method", "cites")   # (contradicts is not offered)
+
+
+def _norm(t):
+    return " ".join((t or "").split()).casefold()
+
+
+def _unit_rows(papers):
+    """Every paper's units as the two phases read them: id, its own takeaway, its full text."""
+    from . import fold
+    out = {}
+    for pid in papers:
+        doc = fold.document(pid, None)
+        rows = []
+        for sec in doc["sections"]:
+            for u in sec["units"]:
+                if (u.get("full") or "").strip():
+                    rows.append({"paper": pid, "unit": u["id"], "section": sec["id"],
+                                 "takeaway": u.get("takeaway") or u["full"][:80], "full": u["full"]})
+        out[pid] = rows
+    return out
+
+
+def _candidates_prompt(papers, rows):
+    blocks = []
+    for pid in papers:
+        title = ""
+        try:
+            title = json.loads(store.read_text(store.pdir(pid) / "meta.json")).get("title") or ""
+        except (OSError, ValueError):
+            pass
+        lines = "\n".join(f"  [{r['unit']}] {r['takeaway']}" for r in rows[pid])
+        blocks.append(f"Paper `{pid}`: {title}\n{lines}")
+    return f"""Research workspace: these papers are being read together.
+
+{chr(10).join(blocks)}
+
+Which relations hold BETWEEN these papers (never inside one paper)? A relation is anchored in one unit of each
+paper, and must rest on what those two units say. Types:
+- extends: one takes the other's method, setup or finding further
+- supports: one's results give evidence for a claim made in the other
+- qualifies: one limits, weakens or adds a caveat to the other's claim
+- shares_method: both rest on the same load-bearing method, dataset or technique (not merely the same field)
+- cites: one cites the other
+Propose at most {CANDIDATE_CAP} candidates, the defensible ones only; none is also an answer.
+Return JSON {{"candidates": [{{"type": "extends", "from": {{"paper": "…", "unit": "…"}}, "to": {{"paper": "…", "unit": "…"}}, "why": "…"}}]}}."""
+
+
+CANDIDATE_SCHEMA = {"type": "object", "properties": {"candidates": {"type": "array", "items": {
+    "type": "object", "properties": {"type": {"type": "string"},
+    "from": {"type": "object", "properties": {"paper": {"type": "string"}, "unit": {"type": "string"}}},
+    "to": {"type": "object", "properties": {"paper": {"type": "string"}, "unit": {"type": "string"}}},
+    "why": {"type": "string"}}, "required": ["type", "from", "to", "why"]}}}, "required": ["candidates"]}
+
+EVIDENCE_SCHEMA = {"type": "object", "properties": {
+    "from_quote": {"type": "string"}, "to_quote": {"type": "string"}, "note": {"type": "string"}},
+    "required": ["from_quote", "to_quote", "note"]}
+
+
+def _evidence_prompt(cand, rows):
+    f, t = cand["from"], cand["to"]
+    ftext = next((r["full"] for r in rows[f["paper"]] if r["unit"] == f["unit"]), "")
+    ttext = next((r["full"] for r in rows[t["paper"]] if r["unit"] == t["unit"]), "")
+    return (f"A proposed relation between two passages of two papers: {cand['type']} — {cand.get('why', '')}\n\n"
+            f"From `{f['paper']}` · `{f['unit']}`, its full text:\n"
+            f"<<<\n{ftext}\n>>>\n\n"
+            f"To `{t['paper']}` · `{t['unit']}`, its full text:\n"
+            f"<<<\n{ttext}\n>>>\n\n"
+            "Quote ONE sentence verbatim from EACH full text — exactly as it is written there, from the from-text "
+            "and from the to-text — that supports this relation. If either text does not carry such a sentence, "
+            "return empty strings for both quotes. Return JSON {\"from_quote\": \"…\", \"to_quote\": \"…\", "
+            "\"note\": \"why the two quotations together support the relation, in one sentence\"}.")
+
+
+def _verified(quote, full):
+    """The quotation must be the text's own words: a whitespace-insensitive substring of the very unit."""
+    q, f = _norm(quote), _norm(full)
+    return bool(q) and len(q) >= 24 and q in f
+
+
+def suggest(ws, papers=None, cfg=None, cache_dir=None, log=lambda *a: None):
+    """A run of model proposals, as the plan bounds it: one candidates call over the takeaways, then one call
+    per candidate for verbatim quotations, each checked against the quoted text. What survives lands as
+    "suggested"; what does not lands in the ledger, with the reason. Returns (workspace, ledger)."""
+    from . import llm
+    if cfg is None:
+        raise RuntimeError("no model")
+    papers = papers or [p["id"] for p in ws["papers"]]
+    papers = [p for p in papers if p in {q["id"] for q in ws["papers"]}]
+    if len(papers) < 2:
+        raise ValueError("a suggestion wants two papers in the workspace at least")
+    ledger = {"candidates": 0, "kept": 0, "calls": 0, "cost": 0.0, "dropped": [], "added": []}
+    rows = _unit_rows(papers)
+    rec, cached = llm.call(_candidates_prompt(papers, rows), CANDIDATE_SCHEMA, cfg, cache_dir, False,
+                           system=llm.system_for({"title": ws["name"]}))
+    ledger["calls"] += 1
+    ledger["cost"] += 0 if cached else (rec.get("cost") or 0)
+    cands = (rec["out"].get("candidates") or [])[:CANDIDATE_CAP]
+    have = {(r["type"], r["from"]["paper"], r["from"]["unit"], r["to"]["paper"], r["to"]["unit"])
+            for r in ws["relations"]}
+    kept = 0
+    for c in cands:
+        ledger["candidates"] += 1
+        why = {"type": c.get("type"), "from": c.get("from") or {}, "to": c.get("to") or {}}
+        if why["type"] not in SUGGEST_TYPES:
+            ledger["dropped"].append({"candidate": why, "reason": "unknown_type"})
+            continue
+        try:
+            f, t = _clean_anchor({"paper": why["from"].get("paper"), "unit": why["from"].get("unit"),
+                                  "section": "", "quote": {}}), _clean_anchor({"paper": why["to"].get("paper"),
+                                  "unit": why["to"].get("unit"), "section": "", "quote": {}})
+        except ValueError as e:
+            ledger["dropped"].append({"candidate": why, "reason": f"bad_anchor: {e}"})
+            continue
+        if (why["type"], f["paper"], f["unit"], t["paper"], t["unit"]) in have:
+            ledger["dropped"].append({"candidate": why, "reason": "duplicate"})
+            continue
+        if kept >= VERIFY_CAP:
+            ledger["dropped"].append({"candidate": why, "reason": "over_budget"})
+            continue
+        try:
+            frec, cached = llm.call(_evidence_prompt(why, rows), EVIDENCE_SCHEMA, cfg, cache_dir, False,
+                                    system=llm.system_for({"title": ws["name"]}))
+        except Exception as e:   # one candidate's evidence call failing drops that candidate, not the run
+            ledger["dropped"].append({"candidate": why, "reason": f"evidence_call_failed: {str(e)[:120]}"})
+            continue
+        ledger["calls"] += 1
+        ledger["cost"] += 0 if cached else (frec.get("cost") or 0)
+        out = frec["out"]
+        fq, tq = out.get("from_quote") or "", out.get("to_quote") or ""
+        ffull = next((r["full"] for r in rows[f["paper"]] if r["unit"] == f["unit"]), "")
+        tfull = next((r["full"] for r in rows[t["paper"]] if r["unit"] == t["unit"]), "")
+        if not (_verified(fq, ffull) and _verified(tq, tfull)):
+            ledger["dropped"].append({"candidate": why, "reason": "fabricated_quote"})
+            continue
+        rel = {"id": f"r-{uuid.uuid4().hex[:8]}", "type": why["type"], "status": "suggested",
+               "from": {**f, "quote": {"exact": fq.strip()[:300], "prefix": "", "suffix": ""}},
+               "to": {**t, "quote": {"exact": tq.strip()[:300], "prefix": "", "suffix": ""}},
+               "note": str(out.get("note") or why.get("why") or "").strip()[:2000],
+               "created": _now(), "updated": _now()}
+        ws["relations"].append(rel)
+        have.add((why["type"], f["paper"], f["unit"], t["paper"], t["unit"]))
+        ledger["kept"] += 1
+        ledger["added"].append(rel["id"])
+        kept += 1
+    with _LOCK:
+        _write(ws)
+    return ws, ledger

@@ -20,7 +20,7 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
-from textfold import ids, research, store
+from textfold import ids, llm, research, store
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -317,6 +317,120 @@ class Server(unittest.TestCase):
         self.assertEqual(self.call(f"/api/research/{ws['id']}", {"add_paper": "2401.99999"})[0], 400)
         self.assertEqual(self.call(f"/api/research/{ws['id']}/relations", {"type": "refutes"})[0], 400)
         self.assertEqual(self.call("/api/research/rw-nope", want_code=True)[0], 404)
+
+class Suggest(unittest.TestCase):
+    """A run of model proposals: takeaways first, then verbatim quotations checked against the text — what the
+    check keeps is a suggestion, what it refuses lands in the ledger with its reason. No model is called."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patch = mock.patch.object(store, "DATA", Path(tmp.name) / "data")
+        patch.start()
+        self.addCleanup(patch.stop)
+        for pid in ("2401.00010", "2401.00011"):
+            self.make_paper(pid)
+
+    def make_paper(self, pid, html=PAPER):
+        d = store.DATA / "papers" / pid
+        d.mkdir(parents=True)
+        (d / "source.html").write_text(html)
+        (d / "meta.json").write_text(json.dumps(dict(META, id=pid)))
+
+    def workspace(self):
+        ws = research.create("W")
+        for pid in ("2401.00010", "2401.00011"):
+            research.add_paper(ws, pid)
+        return ws
+
+    def fake_llm(self):
+        """The model's shape: candidates first, then one evidence call per candidate that earns one. Good quotes
+        come out of the very texts the prompt carries; the fabricated run returns sentences of its own."""
+        import re as _re
+        calls = []
+
+        def fake(prompt, schema, cfg, cache_dir, force, system=None):
+            calls.append(prompt[:40])
+            if "Which relations hold BETWEEN" in prompt:
+                cands = [
+                    {"type": "extends", "from": {"paper": "2401.00010", "unit": "u0"},
+                     "to": {"paper": "2401.00011", "unit": "u1"}, "why": "the second builds on the first"},
+                    {"type": "supports", "from": {"paper": "2401.00010", "unit": "u1"},
+                     "to": {"paper": "2401.00011", "unit": "u0"}, "why": "evidence for it"},
+                    {"type": "cites", "from": {"paper": "2401.00010", "unit": "u0"},
+                     "to": {"paper": "2401.00011", "unit": "u1"}, "why": "a duplicate of what the reader drew"},
+                    {"type": "refutes", "from": {"paper": "2401.00010", "unit": "u0"},
+                     "to": {"paper": "2401.00011", "unit": "u1"}, "why": "not a type the workspace offers"},
+                ]
+                return {"out": {"candidates": cands}, "cost": 0.0}, False
+            texts = _re.findall(r"<<<\n(.*?)\n>>>", prompt, _re.S)
+            if fake.fabricate:
+                return {"out": {"from_quote": "This sentence is the model's own and appears in neither text at all.",
+                                "to_quote": "Nor does this one, which is quite long enough to fail the check.",
+                                "note": "invented"}, "cost": 0.0}, False
+            return {"out": {"from_quote": " ".join(texts[0].split())[:48],
+                            "to_quote": " ".join(texts[1].split())[:48],
+                            "note": "the two passages say the same of the method"}, "cost": 0.0}, False
+        fake.calls = calls
+        fake.fabricate = False
+        return fake
+
+    def test_a_run_keeps_what_the_text_verifies_and_ledgers_the_rest(self):
+        from textfold import fold
+        ws = self.workspace()
+        research.add_relation(ws, "cites", {"paper": "2401.00010", "unit": "u0"},
+                              {"paper": "2401.00011", "unit": "u1"})   # what the third candidate would duplicate
+        fake = self.fake_llm()
+        with mock.patch.object(llm, "call", fake):
+            ws, ledger = research.suggest(ws, None, {"kind": "fake", "id": "fake"})
+        self.assertEqual(ledger["candidates"], 4)
+        self.assertEqual(ledger["kept"], 2, ledger["dropped"])   # extends and supports both verify
+        self.assertEqual(ledger["calls"], 3)   # the candidates call + two candidates that earned a verification
+        reasons = sorted(d["reason"].split(":")[0] for d in ledger["dropped"])
+        self.assertEqual(reasons, ["duplicate", "unknown_type"])
+        sug = next(r for r in ws["relations"] if r["status"] == "suggested")
+        self.assertEqual(sug["type"], "extends")
+        doc = fold.document("2401.00010", None)
+        full = next(u["full"] for sec in doc["sections"] for u in sec["units"] if u["id"] == sug["from"]["unit"])
+        self.assertIn(" ".join(sug["from"]["quote"]["exact"].split()), " ".join(full.split()))
+
+    def test_a_fabricated_quotation_is_dropped_with_its_reason(self):
+        ws = self.workspace()
+        fake = self.fake_llm()
+        fake.fabricate = True
+        with mock.patch.object(llm, "call", fake):
+            ws, ledger = research.suggest(ws, None, {"kind": "fake"})
+        self.assertEqual(ledger["kept"], 0)
+        self.assertEqual(ledger["calls"], 4)   # candidates + three candidates asked for evidence, all refused
+        self.assertEqual([d["reason"] for d in ledger["dropped"] if "fabricated" in d["reason"]],
+                         ["fabricated_quote"] * 3)
+
+    def test_accept_makes_it_the_readers_and_reject_removes_it(self):
+        ws = self.workspace()
+        fake = self.fake_llm()
+        with mock.patch.object(llm, "call", fake):
+            ws, ledger = research.suggest(ws, None, {"kind": "fake"})
+        rid = ledger["added"][0]
+        research.accept_relation(ws, rid)
+        again = research.load(ws["id"])
+        self.assertEqual(next(r for r in again["relations"] if r["id"] == rid)["status"], "user")
+        with self.assertRaises(ValueError):
+            research.accept_relation(ws, rid)   # a user's relation is not a suggestion to confirm twice
+        ws2 = self.workspace()
+        with mock.patch.object(llm, "call", fake):
+            ws2, ledger2 = research.suggest(ws2, None, {"kind": "fake"})
+        research.remove_relation(ws2, ledger2["added"][0])
+        self.assertEqual(len([r for r in research.load(ws2["id"])["relations"] if r["status"] == "suggested"]),
+                         len(ledger2["added"]) - 1)
+
+    def test_the_boundaries_a_run_refuses(self):
+        ws = research.create("W")
+        research.add_paper(ws, "2401.00010")
+        with self.assertRaises(ValueError):   # one paper is not a relation's worth
+            research.suggest(ws, None, {"kind": "fake"})
+        ws2 = self.workspace()
+        with self.assertRaises(RuntimeError):   # no model, no run
+            research.suggest(ws2, None, None)
 
 
 if __name__ == "__main__":
