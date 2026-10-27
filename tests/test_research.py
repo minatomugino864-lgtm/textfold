@@ -407,16 +407,29 @@ class Suggest(unittest.TestCase):
         self.assertIn(" ".join(sug["from"]["quote"]["exact"].split()), " ".join(full.split()))
 
     def test_the_quote_kept_is_the_texts_own_words_not_the_models_casing(self):
+        from textfold import fold
         ws = self.workspace()
-        fake = self.fake_llm()
-        with mock.patch.object(llm, "call", fake):
+        import re as _re
+
+        def shouty(prompt, schema, cfg, cache_dir, force, system=None):
+            if "Which relations hold BETWEEN" in prompt:
+                return {"out": {"candidates": [{"type": "extends", "from": {"paper": "2401.00010", "unit": "u0"},
+                                               "to": {"paper": "2401.00011", "unit": "u1"}, "why": "x"}]}, "cost": 0.0}, False
+            texts = _re.findall(r"<<<\n(.*?)\n>>>", prompt, _re.S)
+            # the model answers the right words in the wrong casing and spacing: the span kept must be the text's
+            fw, tw = texts[0].split(), texts[1].split()
+            shouty_from = fw[0].upper() + " " + " ".join(fw[1:6]) + "  " + " ".join(fw[6:10])
+            shouty_to = tw[0].upper() + " " + " ".join(tw[1:8])
+            return {"out": {"from_quote": shouty_from, "to_quote": shouty_to, "note": "n"}, "cost": 0.0}, False
+        with mock.patch.object(llm, "call", shouty):
             ws, ledger = research.suggest(ws, None, {"kind": "fake"})
         sug = next(r for r in ws["relations"] if r["status"] == "suggested")
-        # the fake answered with the text's words; what is kept must sit in the unit verbatim (its own casing)
-        from textfold import fold
         doc = fold.document("2401.00010", None)
         full = next(u["full"] for sec in doc["sections"] for u in sec["units"] if u["id"] == sug["from"]["unit"])
-        self.assertIn(sug["from"]["quote"]["exact"], full)
+        kept = sug["from"]["quote"]["exact"]
+        self.assertIn(kept, full)                       # the paper's own casing and spacing, verbatim
+        self.assertNotEqual(kept.split()[0], kept.split()[0].upper())   # not the model's shouting
+        self.assertNotIn("  ", kept)                    # the model's doubled spaces did not come along
 
     def test_a_fabricated_quotation_is_dropped_with_its_reason(self):
         ws = self.workspace()
@@ -574,6 +587,73 @@ class Suggest(unittest.TestCase):
                 self.assertEqual(ledger["kept"], want_kept, ledger)
                 if not want_kept:
                     self.assertTrue(any("bad_reply" in d["reason"] for d in ledger["dropped"]), ledger)
+
+    def test_a_model_that_answers_shapes_things_never_are(self):
+        # an end that is a string, a quotation that is a number: each drops its candidate (or reads as invented),
+        # and the run goes on — no AttributeError reaches the reader
+        ws = self.workspace()
+        import re as _re
+        cases = [
+            ({"candidates": [{"type": "extends", "from": "u0", "to": {"paper": "2401.00011", "unit": "u1"}, "why": "x"}]},
+             "bad_anchor", "an end that is a string"),
+            ({"candidates": [{"type": "extends", "from": {"paper": "2401.00010", "unit": "u0"},
+                              "to": {"paper": "2401.00011", "unit": "u1"}, "why": "x"}]}, 12345,
+             "a quotation that is a number"),
+        ]
+        for out, second, why in cases:
+            with self.subTest(why=why):
+                def speak(prompt, schema, cfg, cache_dir, force, system=None):
+                    if "Which relations hold BETWEEN" in prompt:
+                        return {"out": out, "cost": 0.0}, False
+                    texts = _re.findall(r"<<<\n(.*?)\n>>>", prompt, _re.S)
+                    return {"out": {"from_quote": second if second == 12345 else " ".join(texts[0].split())[:48],
+                                    "to_quote": " ".join(texts[1].split())[:48]}, "cost": 0.0}, False
+                with mock.patch.object(llm, "call", speak):
+                    ws2, ledger = research.suggest(ws, None, {"kind": "fake"})
+                self.assertEqual(ledger["kept"], 0, ledger)
+                reasons = [d["reason"].split(":")[0] for d in ledger["dropped"]]
+                self.assertIn("bad_anchor" if why.startswith("an end") else "fabricated_quote", reasons)
+
+    def test_a_dismissed_entry_missing_its_key_and_a_paper_left_mid_run(self):
+        # a dismissed entry a hand has broken is skipped, not a crash
+        ws = self.workspace()
+        ws["dismissed"] = [{"when": "2026-10-27"}, {"key": "extends|2401.00010|u0|2401.00011|u1", "when": "x"}]
+        fake = self.fake_llm()
+        with mock.patch.object(llm, "call", fake):
+            ws2, ledger = research.suggest(ws, None, {"kind": "fake"})
+        # extends was remembered (the entry without its key was skipped, not a crash); supports and cites earn
+        self.assertEqual(ledger["kept"], 2, ledger["dropped"])
+        # a paper the reader takes out of the set while the model thinks: the suggestion does not land
+        ws3 = self.workspace()
+
+        def take_out(n):
+            if n == 2:
+                research.update(ws3["id"], lambda w: research.remove_paper(w, "2401.00011"))
+        fake2 = self.fake_llm(on_call=take_out)
+        with mock.patch.object(llm, "call", fake2):
+            ws4, ledger2 = research.suggest(ws3, None, {"kind": "fake"})
+        self.assertEqual(ledger2["kept"], 0, ledger2)
+        self.assertTrue(any(d["reason"] == "paper_left_workspace" for d in ledger2["dropped"]), ledger2)
+        self.assertEqual([r for r in research.load(ws3["id"])["relations"]], [])
+
+    def test_deleting_an_accepted_models_relation_remembers_it(self):
+        ws = self.workspace()
+        fake = self.fake_llm()
+        with mock.patch.object(llm, "call", fake):
+            ws, ledger = research.suggest(ws, None, {"kind": "fake"})
+        rid = ledger["added"][0]
+        research.accept_relation(ws, rid)          # the reader stands behind it…
+        research.remove_relation(ws, rid)          # …and then takes it back: this relation is said no to
+        # the next run offers that very relation again: the memory of the reader's no must answer for it
+        only_extends = [{"type": "extends", "from": {"paper": "2401.00010", "unit": "u0"},
+                         "to": {"paper": "2401.00011", "unit": "u1"}, "why": "the second builds on the first"}]
+        fake2 = self.fake_llm(cands=only_extends)
+        with mock.patch.object(llm, "call", fake2):
+            ws, ledger2 = research.suggest(ws, None, {"kind": "fake"})
+        self.assertEqual(ledger2["kept"], 0, ledger2)
+        self.assertEqual([d["reason"] for d in ledger2["dropped"]], ["duplicate"])
+        self.assertNotIn(("extends", "u0", "u1"),
+                         [(r["type"], r["from"]["unit"], r["to"]["unit"]) for r in research.load(ws["id"])["relations"]])
 
     def test_the_boundaries_a_run_refuses(self):
         ws = research.create("W")

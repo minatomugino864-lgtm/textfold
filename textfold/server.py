@@ -1066,6 +1066,8 @@ def make_handler(jobs):
                                                       log=lambda line: None)
                     except ValueError as e:
                         return self.json({"error": str(e)}, 400)
+                    if any(d.get("reason") == "workspace_deleted_mid_run" for d in ledger["dropped"]):
+                        return self.json({"error": "no such workspace"}, 404)   # deleted while it asked: gone
                     return self.json({"workspace": ws, "ledger": ledger})
                 self.json({"error": "not found"}, 404)
             except Exception as e:

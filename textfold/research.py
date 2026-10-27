@@ -100,10 +100,14 @@ def load(wid):
 
 
 def _relation_ok(r):
-    """What a relation has to carry to be one of this version's: its kind, and both ends as anchors."""
+    """What a relation has to carry to be one of this version's: its kind, and both ends as anchors (a quotation
+    that is not a shape a quote could be is not a relation this version reads)."""
+    def end_ok(a):
+        quote = a.get("quote")
+        return (isinstance(a, dict) and isinstance(a.get("paper"), str) and isinstance(a.get("unit"), str)
+                and (quote is None or isinstance(quote, dict)))
     return (isinstance(r, dict) and isinstance(r.get("id"), str) and isinstance(r.get("type"), str)
-            and all(isinstance(a, dict) and isinstance(a.get("paper"), str) and isinstance(a.get("unit"), str)
-                    for a in (r.get("from"), r.get("to"))))
+            and all(end_ok(a) for a in (r.get("from"), r.get("to"))))
 
 
 def update(wid, fn):
@@ -226,7 +230,9 @@ def remove_relation(ws, rid):
         ws["relations"] = [r for r in kept if r["id"] != rid]
         if gone is None:
             raise ValueError("no such relation")
-        if gone.get("status") == "suggested":
+        if gone.get("status") == "suggested" or origin_of(gone) == "model":
+            # (a suggestion rejected, or a model's proposal the reader had confirmed and then took back: both are
+            #  the reader saying no to this relation, and the next run remembers it either way)
             ws["dismissed"] = (ws.get("dismissed") or [])[-DISMISS_KEEP + 1:] + [
                 {"key": _dismiss_key(gone), "when": _now()}]
         _write(ws)
@@ -269,7 +275,7 @@ def export_markdown(ws, lang="en"):
             L.append(f"- {REL_TYPES.get(r['type'], 'a relation')}")
             for side in ("from", "to"):
                 a = r[side]
-                q = a["quote"].get("exact") or ""
+                q = (a.get("quote") or {}).get("exact") or ""
                 L.append(f"- **{side}** `{a['paper']}` · `{a['unit']}`: “{q}” — {_link(a, lang)}")
             if r.get("note"):
                 L.append(f"- **Why.** {r['note']}")
@@ -363,8 +369,9 @@ def _evidence_prompt(cand, rows):
 def _evidence_span(quote, full):
     """(span, verdict): the model's quotation found in the very text gives the text's own words to keep — its
     casing, its spacing, exactly as the paper writes it. An empty or unfound quotation is invented ("fabricated");
-    one found but too short to prove anything is refused as its own reason, not as an invention."""
-    q = " ".join((quote or "").split())
+    one found but too short to prove anything is refused as its own reason, not as an invention. A quotation
+    that is not even a string is invented too (a model answers numbers sometimes)."""
+    q = " ".join(str(quote or "").split())
     if not q:
         return None, "fabricated_quote"
     m = re.search(r"\s+".join(map(re.escape, q.split())), full or "", re.I)
@@ -422,7 +429,7 @@ def suggest(ws, papers=None, cfg=None, cache_dir=None, log=lambda *a: None):
     cands = cands[:CANDIDATE_CAP]
 
     # what the run already knows is taken or refused (the disk gets its own check at the merge)
-    have = {_dismiss_key(r) for r in ws["relations"]} | {d["key"] for d in ws.get("dismissed", []) if isinstance(d, dict)}
+    have = {_dismiss_key(r) for r in ws["relations"]} | {d.get("key") for d in ws.get("dismissed", []) if isinstance(d, dict) and d.get("key")}
     rows_by_key = {(r["paper"], r["unit"]): r["full"] for pid in rows for r in rows[pid]}
     earned = []   # (type, from anchor, to anchor, from span, to span, note) — merged at the end, in the lock
     for c in cands:
@@ -434,6 +441,9 @@ def suggest(ws, papers=None, cfg=None, cache_dir=None, log=lambda *a: None):
                   "why": c.get("why") or ""}
         if parsed["type"] not in SUGGEST_TYPES:
             ledger["dropped"].append({"candidate": parsed, "reason": "unknown_type"})
+            continue
+        if not all(isinstance(parsed[k], dict) for k in ("from", "to")):
+            ledger["dropped"].append({"candidate": parsed, "reason": "bad_anchor: an end that is not a shape"})
             continue
         try:
             f = _clean_anchor({"paper": parsed["from"].get("paper"), "unit": parsed["from"].get("unit"),
@@ -481,11 +491,15 @@ def suggest(ws, papers=None, cfg=None, cache_dir=None, log=lambda *a: None):
 
     # the merge, in the short lock, into the workspace as it stands NOW: nothing the reader did is lost
     def merge(w):
-        fresh = {_dismiss_key(r) for r in w["relations"]} | {d["key"] for d in w.get("dismissed", []) if isinstance(d, dict)}
+        fresh = {_dismiss_key(r) for r in w["relations"]} | {d.get("key") for d in w.get("dismissed", []) if isinstance(d, dict) and d.get("key")}
+        members = {p["id"] for p in w["papers"]}
         for parsed, f, t, fspan, tspan, note in earned:
             key = "|".join((parsed["type"], f["paper"], f["unit"], t["paper"], t["unit"]))
             if key in fresh:
                 ledger["dropped"].append({"candidate": parsed, "reason": "duplicate"})   # drawn while we asked
+                continue
+            if f["paper"] not in members or t["paper"] not in members:
+                ledger["dropped"].append({"candidate": parsed, "reason": "paper_left_workspace"})   # taken out mid-run
                 continue
             fresh.add(key)
             w["relations"].append({
