@@ -170,6 +170,7 @@ blockquote.quote { border-left: 2.5px solid var(--line); padding: 2px 0 2px 10px
       <p class="m">One node a paper, one edge a relation, from &rarr; to. An edge opens its relation below.</p>
       <div id="graphwrap"></div>
       <p id="graph-legend" class="m"></p>
+      <div id="edge-detail" class="rel" hidden></div>
     </div>
   </section>
   <section id="empty" class="empty" hidden>
@@ -464,12 +465,27 @@ function renderGraph(ws) {
       <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink)"/></marker></defs>
     ${edges}${nodes}</svg>`;
   legend.innerHTML = Object.entries(TYPE_COLOR).map(([t, c]) => `<span class="sw" style="background:${c}"></span>${esc(t)}`).join('');
+  const detail = $('edge-detail');
+  detail.hidden = true;
   for (const e of wrap.querySelectorAll('.edge'))
     e.addEventListener('click', () => {
+      const again = e.classList.contains('hot');
       wrap.querySelectorAll('.edge.hot').forEach((x) => x.classList.remove('hot'));
+      if (again) { detail.hidden = true; return; }   // the same edge once more: folded away
       e.classList.add('hot');
-      setView('relations');
-      jumpTo(e.dataset.rel);
+      const r = ws.relations.find((x) => x.id === e.dataset.rel);
+      if (!r) return;
+      // the sides' anchor state comes from /api/ids, as the list's does: without it every anchor would read as moved
+      Promise.all([anchorStatus(r.from.paper, r.from.unit), anchorStatus(r.to.paper, r.to.unit)])
+        .then(([fs, ts]) => {
+          detail.innerHTML = `<div class="rel-head"><span class="rel-type">${esc(r.type)}</span><span class="rel-id">${esc(r.id)}</span>
+              <button type="button" class="rm" data-go="list">In the list ↓</button></div>
+            <div class="anchor">${anchorSide({ ...r.from, side: 'from' }, fs)}${anchorSide({ ...r.to, side: 'to' }, ts)}</div>
+            ${r.note ? `<div class="note"><strong>Why.</strong> ${esc(r.note)}</div>` : ''}`;
+          detail.hidden = false;
+          detail.querySelector('[data-go="list"]').addEventListener('click', () => { setView('relations'); jumpTo(r.id); });
+        });
+      detail.querySelector('[data-go="list"]').addEventListener('click', () => { setView('relations'); jumpTo(r.id); });
     });
 }
 
