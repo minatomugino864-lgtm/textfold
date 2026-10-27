@@ -65,6 +65,31 @@ button:hover { border-color: var(--accent); }
 .relrow .secsaid { font-size: 12px; color: var(--muted); padding-bottom: 8px; }
 blockquote.quote { border-left: 2.5px solid var(--line); padding: 2px 0 2px 10px; min-height: 1.4em; color: var(--muted); font-style: italic; }
 #empty { color: var(--muted); }
+/* the three views over the same relations: list, compare, graph */
+.views { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.views .view { border: 0; border-radius: 0; padding: 6px 12px; font-size: 13px; color: var(--muted); }
+.views .view + .view { border-left: 1px solid var(--line); }
+.views .view.on { background: var(--bg); color: var(--ink); font-weight: 600; }
+#matrix table { border-collapse: collapse; margin: 10px 0 16px; }
+#matrix th, #matrix td { border: 1px solid var(--line); padding: 7px 10px; font-size: 13px; text-align: left; }
+#matrix th { background: var(--bg); font-weight: 600; }
+#matrix td .cell-rel { display: inline-block; margin: 1px 6px 1px 0; padding: 1px 7px; border-radius: 999px; font-size: 11.5px; color: #fff; cursor: pointer; }
+#matrix td.none { color: var(--line); }
+.sidecol { margin-bottom: 14px; }
+.sidecol h4 { margin: 8px 0 4px; font-size: 13px; }
+.sidecol ul { margin: 0; padding-left: 18px; }
+.sidecol li { font-size: 13.5px; margin: 3px 0; }
+.sidecol .t { font-weight: 600; color: var(--accent); }
+#graphwrap svg { background: #fff; border: 1px solid var(--line); border-radius: 12px; width: 100%; height: auto; }
+#graphwrap .edge { cursor: pointer; }
+#graphwrap .edge path.wire { fill: none; stroke-width: 2; opacity: .75; }
+#graphwrap .edge path.hit { fill: none; stroke: transparent; stroke-width: 18; pointer-events: stroke; }
+#graphwrap .edge.hot path.wire { stroke-width: 3.5; opacity: 1; }
+#graphwrap .edge:hover path.wire { stroke-width: 3.5; }
+#graphwrap .node circle { fill: var(--card); stroke: var(--ink); stroke-width: 1.5; }
+#graphwrap .node text { font: 600 11.5px var(--sans); fill: var(--ink); }
+#graph-legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin: 0 4px 0 12px; }
+.m { color: var(--muted); font-size: 13px; }
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } .anchor { grid-template-columns: 1fr; } }
 
 </style>
@@ -92,6 +117,11 @@ blockquote.quote { border-left: 2.5px solid var(--line); padding: 2px 0 2px 10px
       <h2 id="ws-title"></h2>
       <p id="ws-question" class="question"></p>
       <div class="wsactions">
+        <span class="views" id="views">
+          <button type="button" class="view on" data-view="relations">Relations</button>
+          <button type="button" class="view" data-view="compare">Compare</button>
+          <button type="button" class="view" data-view="graph">Graph</button>
+        </span>
         <button type="button" id="ws-rename">Rename</button>
         <button type="button" id="ws-export-md">Export Markdown</button>
         <button type="button" id="ws-export-json">Export JSON</button>
@@ -105,7 +135,7 @@ blockquote.quote { border-left: 2.5px solid var(--line); padding: 2px 0 2px 10px
         <button type="submit">Add</button>
       </form>
     </div>
-    <div class="relations">
+    <div class="relations viewpane" id="view-relations">
       <h3>Relations</h3>
       <div id="rel-list"></div>
       <details id="newrel">
@@ -128,6 +158,18 @@ blockquote.quote { border-left: 2.5px solid var(--line); padding: 2px 0 2px 10px
           <button type="submit" class="primary">Save relation</button>
         </form>
       </details>
+    </div>
+    <div class="viewpane" id="view-compare" hidden>
+      <h3>Compare</h3>
+      <p class="m">The papers against each other: what each asserts towards the other, and what it receives — the same relations the list holds, read across.</p>
+      <div id="matrix"></div>
+      <div id="sides"></div>
+    </div>
+    <div class="viewpane" id="view-graph" hidden>
+      <h3>Graph</h3>
+      <p class="m">One node a paper, one edge a relation, from &rarr; to. An edge opens its relation below.</p>
+      <div id="graphwrap"></div>
+      <p id="graph-legend" class="m"></p>
     </div>
   </section>
   <section id="empty" class="empty" hidden>
@@ -193,6 +235,8 @@ function renderWorkspace() {
   }
   renderRelations(ws);
   renderRelForm(ws);
+  if (view === 'compare') renderCompare(ws);   // (the open view reads the relations just changed)
+  if (view === 'graph') renderGraph(ws);
 }
 
 function anchorSide(a, status) {
@@ -308,6 +352,126 @@ $('relform').addEventListener('submit', async (e) => {
     renderWorkspace(); renderList();
   } catch (x) { alert(x.message); }
 });
+
+// ── the three views over the same relations ──────────────────────────────────────────
+let view = 'relations';
+const TYPE_COLOR = {
+  extends: '#8a5a1e', supports: '#2e6e4e', qualifies: '#a33d2a',
+  contrasts: '#7a4a8a', shares_method: '#3a5a8a', cites: '#8a8a3a',
+};
+const relsBetween = (ws, a, b) => ws.relations.filter((r) =>
+  (r.from.paper === a && r.to.paper === b) || (r.from.paper === b && r.to.paper === a));
+
+function setView(name) {
+  view = name;
+  for (const b of document.querySelectorAll('#views .view')) b.classList.toggle('on', b.dataset.view === name);
+  for (const pane of document.querySelectorAll('.viewpane')) pane.hidden = pane.id !== 'view-' + name;
+  if (name === 'compare') renderCompare(current);
+  if (name === 'graph') renderGraph(current);
+}
+for (const b of document.querySelectorAll('#views .view'))
+  b.addEventListener('click', () => setView(b.dataset.view));
+
+const typeChip = (r) => `<span class="cell-rel" data-rel="${esc(r.id)}" style="background:${TYPE_COLOR[r.type] || '#888'}" title="${esc(r.note || r.type)}">${esc(r.type)}${r.from.paper === r.to.paper ? ' ·self' : ''}</span>`;
+
+function renderCompare(ws) {
+  const papers = ws.papers.map((p) => p.id);
+  const cell = (a, b) => {
+    if (a === b) return { self: ws.relations.filter((r) => r.from.paper === a && r.to.paper === a) };
+    return relsBetween(ws, a, b);
+  };
+  // the matrix: papers against papers, a chip per relation in the cell (both directions count)
+  let t = '<table><tr><th></th>' + papers.map((p) => `<th>${esc(p)}</th>`).join('') + '</tr>';
+  for (const a of papers) {
+    t += `<tr><th>${esc(a)}</th>`;
+    for (const b of papers) {
+      const rs = a === b ? cell(a, b).self : cell(a, b);
+      t += rs.length ? `<td>${rs.map(typeChip).join('')}</td>` : '<td class="none">—</td>';
+    }
+    t += '</tr>';
+  }
+  t += '</table>';
+  // what each paper asserts towards the others, and what it receives
+  let s = '';
+  for (const p of papers) {
+    const out = ws.relations.filter((r) => r.from.paper === p), inc = ws.relations.filter((r) => r.to.paper === p);
+    if (!out.length && !inc.length) continue;
+    s += `<div class="sidecol"><h4>${esc(p)}</h4>`;
+    if (out.length) s += '<ul>' + out.map((r) => `<li><span class="t">${esc(r.type)}</span> → ${esc(r.to.paper)} <code>${esc(r.to.unit)}</code>${r.note ? ` — ${esc(r.note)}` : ''}</li>`).join('') + '</ul>';
+    if (inc.length) s += '<ul>' + inc.map((r) => `<li>← <span class="t">${esc(r.type)}</span> from ${esc(r.from.paper)} <code>${esc(r.from.unit)}</code></li>`).join('') + '</ul>';
+    s += '</div>';
+  }
+  $('matrix').innerHTML = t;
+  $('sides').innerHTML = s || '<p class="m">Nothing to compare yet — draw a relation first.</p>';
+  wireChips($('matrix'));
+}
+
+function wireChips(root) {   // a chip in the matrix brings its relation up in the list
+  for (const chip of root.querySelectorAll('.cell-rel'))
+    chip.addEventListener('click', () => { setView('relations'); jumpTo(chip.dataset.rel); });
+}
+
+function jumpTo(rid) {
+  const el = document.querySelector(`.rel .rm[title="Delete this relation"]`) && document.evaluate(
+    `//div[contains(@class,"rel")][.//text()[contains(., "${rid}")]]`, document, null, 9, null).singleNodeValue;
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.style.transition = 'box-shadow .2s'; el.style.boxShadow = '0 0 0 3px ' + (TYPE_COLOR[el.querySelector('.rel-type')?.textContent?.trim()] || '#8a5a1e');
+  setTimeout(() => { el.style.boxShadow = ''; }, 1200);
+}
+
+// the graph: one node a paper, one curved edge a relation, from → to; an edge opens its relation
+function renderGraph(ws) {
+  const papers = ws.papers.map((p) => p.id);
+  const wrap = $('graphwrap'), legend = $('graph-legend');
+  if (papers.length < 2 || !ws.relations.length) {
+    wrap.innerHTML = '<p class="m">' + (papers.length < 2 ? 'A graph wants two papers or more.' : 'No relations to draw yet.') + '</p>';
+    legend.innerHTML = ''; return;
+  }
+  const W = 860, H = Math.max(320, 110 * papers.length), cx = W / 2, cy = H / 2, R = Math.min(cx, cy) - 70;
+  const pos = Object.fromEntries(papers.map((p, i) => {
+    const ang = -Math.PI / 2 + (2 * Math.PI * i) / papers.length;
+    return [p, [cx + R * Math.cos(ang), cy + R * Math.sin(ang)]];
+  }));
+  const perPair = {};
+  for (const r of ws.relations) {
+    const k = [r.from.paper, r.to.paper].sort().join('|');
+    (perPair[k] = perPair[k] || []).push(r);
+  }
+  let edges = '';
+  for (const [k, rs] of Object.entries(perPair)) {
+    rs.forEach((r, i) => {
+      const [x1, y1] = pos[r.from.paper], [x2, y2] = pos[r.to.paper];
+      const mx0 = (x1 + x2) / 2, my0 = (y1 + y2) / 2;
+      const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+      const off = ((i - (rs.length - 1) / 2) * 26) * (dy >= 0 ? 1 : -1) * (x1 === x2 ? 1 : 1);
+      const qx = mx0 + (-dy / len) * off, qy = my0 + (dx / len) * off;
+      const self = r.from.paper === r.to.paper;
+      const d = self
+        ? `M ${x1 + 16} ${y1 - 10} C ${x1 + 90} ${y1 - 90}, ${x1 - 90} ${y1 - 90}, ${x1 - 16} ${y1 - 10}`
+        : `M ${x1 + (dx / len) * 30} ${y1 + (dy / len) * 30} Q ${qx} ${qy}, ${x2 - (dx / len) * 34} ${y2 - (dy / len) * 34}`;
+      edges += `<g class="edge" data-rel="${esc(r.id)}"><title>${esc(r.type)}: ${esc((r.note || '').slice(0, 120))}</title>
+        <path class="hit" d="${d}"/>
+        <path class="wire" d="${d}" stroke="${TYPE_COLOR[r.type] || '#888'}" marker-end="url(#arrow)"/></g>`;
+    });
+  }
+  const nodes = papers.map((p) => {
+    const [x, y] = pos[p];
+    return `<g class="node" data-paper="${esc(p)}"><circle cx="${x}" cy="${y}" r="26"/><text x="${x}" y="${y + 4}" text-anchor="middle">${esc(p.length > 12 ? p.slice(0, 11) + '…' : p)}</text></g>`;
+  }).join('');
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img">
+    <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink)"/></marker></defs>
+    ${edges}${nodes}</svg>`;
+  legend.innerHTML = Object.entries(TYPE_COLOR).map(([t, c]) => `<span class="sw" style="background:${c}"></span>${esc(t)}`).join('');
+  for (const e of wrap.querySelectorAll('.edge'))
+    e.addEventListener('click', () => {
+      wrap.querySelectorAll('.edge.hot').forEach((x) => x.classList.remove('hot'));
+      e.classList.add('hot');
+      setView('relations');
+      jumpTo(e.dataset.rel);
+    });
+}
 
 // ── the rest of the page ─────────────────────────────────────────────────────────────
 $('newws').addEventListener('submit', async (e) => {
