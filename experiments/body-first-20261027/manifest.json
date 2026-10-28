@@ -1,0 +1,40 @@
+{
+ "papers": {
+  "2310.01704": {
+   "units": 52,
+   "appendix_units": 16,
+   "appendix_unit_share": 0.308,
+   "words": 4463,
+   "appendix_words": 947,
+   "appendix_word_share": 0.212,
+   "chunks_with_units": 10,
+   "appendix_chunks": 5,
+   "source_sha16": "c89e8b1f24b7370a"
+  },
+  "2310.06117": {
+   "units": 117,
+   "appendix_units": 52,
+   "appendix_unit_share": 0.444,
+   "words": 5916,
+   "appendix_words": 1593,
+   "appendix_word_share": 0.269,
+   "chunks_with_units": 36,
+   "appendix_chunks": 14,
+   "source_sha16": "ad93a493ecce1703"
+  },
+  "2308.00352": {
+   "units": 101,
+   "appendix_units": 50,
+   "appendix_unit_share": 0.495,
+   "words": 6733,
+   "appendix_words": 2617,
+   "appendix_word_share": 0.389,
+   "chunks_with_units": 46,
+   "appendix_chunks": 27,
+   "source_sha16": "a215cbce2987f999"
+  }
+ },
+ "lang": "zh",
+ "date": "2026-10-28",
+ "model": "(the reader's configured one)"
+}

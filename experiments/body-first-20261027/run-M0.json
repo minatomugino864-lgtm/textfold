@@ -1,0 +1,27 @@
+{
+ "strategy": "M0",
+ "knob": null,
+ "papers": {
+  "2310.01704": {
+   "body_persisted_s": 51.1,
+   "pipeline_done_s": 51.1,
+   "calls": 25,
+   "gaps_after_build": null,
+   "job_status": "done"
+  },
+  "2310.06117": {
+   "body_persisted_s": 77.2,
+   "pipeline_done_s": 77.2,
+   "calls": 75,
+   "gaps_after_build": null,
+   "job_status": "done"
+  },
+  "2308.00352": {
+   "body_persisted_s": 80.2,
+   "pipeline_done_s": 80.2,
+   "calls": 95,
+   "gaps_after_build": null,
+   "job_status": "done"
+  }
+ }
+}

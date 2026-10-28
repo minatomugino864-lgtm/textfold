@@ -1,0 +1,66 @@
+{"t_rel": 2.0, "run": "warmup", "paper": "2310.01704", "event": "job_start_en"}
+{"t_rel": 173.6, "run": "warmup", "paper": "2310.01704", "event": "job_done", "detail": 171.6}
+{"t_rel": 173.6, "run": "warmup", "paper": "2310.06117", "event": "job_start_en"}
+{"t_rel": 495.6, "run": "warmup", "paper": "2310.06117", "event": "job_done", "detail": 322.0}
+{"t_rel": 495.6, "run": "warmup", "paper": "2308.00352", "event": "job_start_en"}
+{"t_rel": 715.3, "run": "warmup", "paper": "2308.00352", "event": "job_done", "detail": 219.7}
+{"t_rel": 2.1, "run": "M0", "paper": "2310.01704", "event": "job_start_zh"}
+{"t_rel": 4.3, "run": "M0", "paper": "2310.01704", "event": "job_stage_translate", "detail": "0/13"}
+{"t_rel": 53.1, "run": "M0", "paper": "2310.01704", "event": "job_stage_done", "detail": "1/1"}
+{"t_rel": 53.2, "run": "M0", "paper": "2310.01704", "event": "body_readable_http", "detail": 36}
+{"t_rel": 53.2, "run": "M0", "paper": "2310.01704", "event": "job_done", "detail": "done"}
+{"t_rel": 53.2, "run": "M0", "paper": "2310.06117", "event": "job_start_zh"}
+{"t_rel": 55.4, "run": "M0", "paper": "2310.06117", "event": "job_stage_translate", "detail": "0/37"}
+{"t_rel": 130.2, "run": "M0", "paper": "2310.06117", "event": "job_stage_done", "detail": "1/1"}
+{"t_rel": 130.4, "run": "M0", "paper": "2310.06117", "event": "body_readable_http", "detail": 65}
+{"t_rel": 130.4, "run": "M0", "paper": "2310.06117", "event": "job_done", "detail": "done"}
+{"t_rel": 130.4, "run": "M0", "paper": "2308.00352", "event": "job_start_zh"}
+{"t_rel": 132.6, "run": "M0", "paper": "2308.00352", "event": "job_stage_translate", "detail": "0/47"}
+{"t_rel": 210.5, "run": "M0", "paper": "2308.00352", "event": "job_stage_done", "detail": "1/1"}
+{"t_rel": 210.6, "run": "M0", "paper": "2308.00352", "event": "body_readable_http", "detail": 51}
+{"t_rel": 210.6, "run": "M0", "paper": "2308.00352", "event": "job_done", "detail": "done"}
+{"t_rel": 2.1, "run": "M1", "paper": "2310.01704", "event": "job_start_zh"}
+{"t_rel": 4.3, "run": "M1", "paper": "2310.01704", "event": "job_stage_translate", "detail": "0/13"}
+{"t_rel": 50.9, "run": "M1", "paper": "2310.01704", "event": "job_stage_done", "detail": "1/1"}
+{"t_rel": 50.9, "run": "M1", "paper": "2310.01704", "event": "body_readable_http", "detail": 36}
+{"t_rel": 50.9, "run": "M1", "paper": "2310.01704", "event": "job_done", "detail": "done"}
+{"t_rel": 50.9, "run": "M1", "paper": "2310.06117", "event": "job_start_zh"}
+{"t_rel": 53.2, "run": "M1", "paper": "2310.06117", "event": "job_stage_translate", "detail": "0/37"}
+{"t_rel": 128.1, "run": "M1", "paper": "2310.06117", "event": "job_stage_done", "detail": "1/1"}
+{"t_rel": 128.2, "run": "M1", "paper": "2310.06117", "event": "body_readable_http", "detail": 65}
+{"t_rel": 128.2, "run": "M1", "paper": "2310.06117", "event": "job_done", "detail": "done"}
+{"t_rel": 128.2, "run": "M1", "paper": "2308.00352", "event": "job_start_zh"}
+{"t_rel": 130.5, "run": "M1", "paper": "2308.00352", "event": "job_stage_translate", "detail": "0/47"}
+{"t_rel": 210.5, "run": "M1", "paper": "2308.00352", "event": "job_stage_done", "detail": "1/1"}
+{"t_rel": 210.6, "run": "M1", "paper": "2308.00352", "event": "body_readable_http", "detail": 51}
+{"t_rel": 210.6, "run": "M1", "paper": "2308.00352", "event": "job_done", "detail": "done"}
+{"t_rel": 2.1, "run": "M2", "paper": "2310.01704", "event": "job_start_zh"}
+{"t_rel": 4.3, "run": "M2", "paper": "2310.01704", "event": "job_stage_translate", "detail": "0/8"}
+{"t_rel": 648.0, "run": "M2", "paper": "2310.01704", "event": "job_stage_done", "detail": "1/1"}
+{"t_rel": 648.1, "run": "M2", "paper": "2310.01704", "event": "body_readable_http", "detail": 36}
+{"t_rel": 648.1, "run": "M2", "paper": "2310.01704", "event": "job_done", "detail": "done"}
+{"t_rel": 648.1, "run": "M2", "paper": "2310.01704", "event": "fill_start_open_equivalent"}
+{"t_rel": 650.2, "run": "M2", "paper": "2310.01704", "event": "fill_done_gaps_empty"}
+{"t_rel": 650.2, "run": "M2", "paper": "2310.06117", "event": "job_start_zh"}
+{"t_rel": 652.4, "run": "M2", "paper": "2310.06117", "event": "job_stage_queued", "detail": "0/0"}
+{"t_rel": 669.6, "run": "M2", "paper": "2310.06117", "event": "job_stage_translate", "detail": "0/23"}
+{"t_rel": 721.0, "run": "M2", "paper": "2310.06117", "event": "job_stage_done", "detail": "1/1"}
+{"t_rel": 721.2, "run": "M2", "paper": "2310.06117", "event": "body_readable_http", "detail": 65}
+{"t_rel": 721.2, "run": "M2", "paper": "2310.06117", "event": "job_done", "detail": "done"}
+{"t_rel": 721.2, "run": "M2", "paper": "2310.06117", "event": "fill_start_open_equivalent"}
+{"t_rel": 723.3, "run": "M2", "paper": "2310.06117", "event": "fill_done_gaps_empty"}
+{"t_rel": 723.3, "run": "M2", "paper": "2308.00352", "event": "job_start_zh"}
+{"t_rel": 725.6, "run": "M2", "paper": "2308.00352", "event": "job_stage_queued", "detail": "0/0"}
+{"t_rel": 753.7, "run": "M2", "paper": "2308.00352", "event": "job_stage_translate", "detail": "0/20"}
+{"t_rel": 809.9, "run": "M2", "paper": "2308.00352", "event": "job_stage_done", "detail": "1/1"}
+{"t_rel": 810.1, "run": "M2", "paper": "2308.00352", "event": "body_readable_http", "detail": 51}
+{"t_rel": 810.1, "run": "M2", "paper": "2308.00352", "event": "job_done", "detail": "done"}
+{"t_rel": 810.1, "run": "M2", "paper": "2308.00352", "event": "fill_start_open_equivalent"}
+{"t_rel": 812.3, "run": "M2", "paper": "2308.00352", "event": "fill_done_gaps_empty"}
+{"t_rel": 2.1, "run": "M2", "paper": "2310.06117", "event": "job_start_zh"}
+{"t_rel": 4.4, "run": "M2", "paper": "2310.06117", "event": "job_stage_translate", "detail": "0/23"}
+{"t_rel": 66.6, "run": "M2", "paper": "2310.06117", "event": "job_stage_done", "detail": "1/1"}
+{"t_rel": 66.7, "run": "M2", "paper": "2310.06117", "event": "body_readable_http", "detail": 65}
+{"t_rel": 66.7, "run": "M2", "paper": "2310.06117", "event": "job_done", "detail": "done"}
+{"t_rel": 66.9, "run": "M2", "paper": "2310.06117", "event": "fill_start_open_equivalent", "detail": 52}
+{"t_rel": 118.5, "run": "M2", "paper": "2310.06117", "event": "fill_done_all_translated"}

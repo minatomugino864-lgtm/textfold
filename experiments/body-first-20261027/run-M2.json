@@ -1,0 +1,33 @@
+{
+ "strategy": "M2",
+ "knob": "skip",
+ "papers": {
+  "2310.01704": {
+   "body_persisted_s": 646.0,
+   "pipeline_done_s": 646.0,
+   "calls": 20,
+   "gaps_after_build": null,
+   "job_status": "done",
+   "appendix_fill_s": 2.1,
+   "calls_after_fill": 20
+  },
+  "2310.06117": {
+   "body_persisted_s": 71.0,
+   "pipeline_done_s": 71.0,
+   "calls": 62,
+   "gaps_after_build": null,
+   "job_status": "done",
+   "appendix_fill_s": 2.1,
+   "calls_after_fill": 62
+  },
+  "2308.00352": {
+   "body_persisted_s": 86.8,
+   "pipeline_done_s": 86.8,
+   "calls": 68,
+   "gaps_after_build": null,
+   "job_status": "done",
+   "appendix_fill_s": 2.2,
+   "calls_after_fill": 68
+  }
+ }
+}
